@@ -67,6 +67,74 @@ Mentális ébresztő:
 **Mobility** (15 perc):
 Dinamikus nyújtások, csípő, váll, boka mobilizáció.
 
+ 1. Teljes testes bemelegítés (3 perc)
+
+Helyben futás – 1 perc → fokozatosan gyorsítod
+
+Magas térdemelés – 30 mp
+
+Sarokemelés (futás közben sarkat a fenékhez) – 30 mp
+
+Jumping jack (terpesz-zár szökdelés) – 1 perc
+
+
+2. Ízületi mobilizáció (4 perc)
+
+(10-15 ismétlés oldalanként)
+
+Fejkörzés – előre, hátra, oldalra
+
+Vállkörzés – előre-hátra, kis és nagy körök
+
+Kar-lengés keresztbe és oldalra
+
+Csípőkörzés – nagy körök mindkét irányba
+
+Térdkörzés – enyhe hajlított lábbal
+
+Bokakörzés – mindkét irányban
+
+
+ 3. Dinamikus izomnyújtás (6 perc)
+
+Lábra és csípőre:
+
+Láblendítés előre-hátra – 10-10 lábanként
+→ Fókusz a csípőhajlítók és combhajlítók mobilizálásán
+
+Láblendítés oldalra (keresztezve és kifelé) – 10-10
+→ Csípő nyitás
+
+Kitörés előre, majd karokkal törzsdöntés hátra – 8-8
+→ Csípőhajlító és combnyújtás
+
+Oldalirányú kitörés – 8-8 oldalra
+→ Belső comb lazítása
+
+Inchworm (járkálós plank):
+→ Állásból előregyalogolsz plank pozícióba, majd vissza → 6-8 ismétlés
+
+
+Törzsre és felsőtestre:
+
+Törzsfordítás állásban (boxoló mozdulat) – 20 gyors váltás
+
+Kar körzés és kar-lengés fel-le – 10-10
+
+Törzshajlítás oldalra – 10-10
+
+
+
+
+
+ 4. Harcra hangoló végső aktiváció (2 perc)
+
+Shadowbox (csak lábmunkával) – 30 mp
+
+Shadowbox (kéz+láb kombináció) – 30 mp
+
+Könnyed skippelés, oldalirányú mozgás, előre-hátra – 1 perc
+
 
 
 ---
