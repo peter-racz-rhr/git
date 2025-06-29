@@ -71,45 +71,50 @@ Dinamikus nyújtások, csípő, váll, boka mobilizáció.
 
 ---
 
-🔥 Délutáni blokk (15:00–17:00) — Technika + robbanékonyság
+#### 🔥 Délutáni blokk (15:00–17:00) Technikai/küzdősport edzés boxzsák nélkül:
 
-Kick-box technika: (Otthon vagy a teremben)
+🟩 **Bemelegítés** (10 perc)
 
-3×3 perc árnyékolás (fókusz, technika, mozgás, fejvédelem)
+Ugrókötelezés 3 perc (ha nincs, helyben magas térdemeléssel)
 
-4×2 perc zsákolás → 1 perc pihenő
+Dinamikus nyújtás: váll, csípő, boka
 
-Kombók: 1-2 low kick / 1-2-3 body kick / hátralépés → kontra
+Mobilitási körök: váll-, csípő-, térdkörzés
 
+🥋 **Fő rész** (30-35 perc)
 
-3×3 perc lábmunka drill (lépések, kitérések, fel-le mozgás)
+🔹 Árnyékharchoz felépített körök (4 kör x 3 perc)
 
+1. kör: Csak alap lábmunkák – előre, hátra, oldalra, kitérés, ritmusváltás
 
-Robbanékonyság:
+2. kör: Tiszta kéztechnikák – egyenesek (jab, cross), horog, felütés, kombinációk (pl. jab-jab-cross, jab-cross-hook)
 
-Box jump 4×8
+3. kör: Lábtechnikák beépítése – elülső rúgás, hátsó rúgás, oldalrúgás mozgás közben
 
-Felfelé sprint (kertben dombra, vagy emelkedő) × 6
-
-Medicinlabda dobás előre vagy a földre (ha van) 4×10
-
-Plyometrikus fekvőtámasz (felugró kézzel) 4×10
+4. kör: Komplett harci szimuláció – lábmunkával, kezekkel, rúgásokkal, testcselek, kitérések
 
 
-Kondicionáló finisher:
-
-5 kör:
-
-10 burpee
-
-20 guggolás
-
-10 fekvő
-
-10 felütés-ütés a levegőbe (max sebesség)
+⏱️ Körök között 1 perc pihenő.
 
 
+🔥 **Erő-állóképességi blokk** (4 kör)
 
+10 fekvőtámasz + 10 gyors hegyifutás + 10 guggolás + 20 ütés árnyékharchoz teljes erőből
+🔁 4-szer
+
+
+🧠 **Mentális edzés** – Tigrisszem blokk (5 perc)
+
+Szemed végig nyitva, koncentrált tekintet árnyékharchoz, folyamatos vizuális képzelés: "ellenfeled támad, te kitérsz, visszatámadsz."
+
+Tükör előtt végzett árnyékharchoz: fókuszálsz a szemkontaktusra (saját szemed nézed), nem csak az ütéseidet.
+
+
+🧘 **Levezetés, nyújtás** (10 perc)
+
+Mély légzéses nyújtás: váll, combhajlító, csípő
+
+Légzőgyakorlat: 4 mp belégzés – 4 mp tartás – 6 mp kilégzés (3 percig)
 
 
 ---
@@ -158,10 +163,6 @@ Lefekvés előtt:
 "Megcsinálom."
 
 "Harcos vagyok."
-
-
-
-
 
 
 ---
