@@ -28,15 +28,29 @@
               "type": "markdown",
               "state": {
                 "file": "Mindennapi jegyzetek/Angol kaja week 🍪.md",
-                "mode": "source",
+                "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
               "title": "Angol kaja week 🍪"
             }
+          },
+          {
+            "id": "1a38662b9832d57d",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Nyár 2025 kick box.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Nyár 2025 kick box"
+            }
           }
         ],
-        "currentTab": 1
+        "currentTab": 2
       }
     ],
     "direction": "vertical"
@@ -168,11 +182,12 @@
       "command-palette:Open command palette": false
     }
   },
-  "active": "2708e4e9b2066932",
+  "active": "1a38662b9832d57d",
   "lastOpenFiles": [
-    "Töri Kereszténység összefoglalása.md",
     "Mindennapi jegyzetek/Angol kaja week 🍪.md",
-    "Untitled",
+    "Nyár 2025 kick box.md",
+    "Edzésterv",
+    "Töri Kereszténység összefoglalása.md",
     "Mindennapi jegyzetek"
   ]
 }

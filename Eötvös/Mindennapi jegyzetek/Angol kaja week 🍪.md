@@ -1,13 +1,13 @@
 Bebe: Tapas
 Jómagam: Churros
 
-https://www.nosalty.hu/recept/churros-spanyol-edesseg?adag=12#ingredients
+https://www.nosalty.hu/recept/churros-spanyol-edesseg?adag=5#ingredients
 
 ⬆️
-Churros recept - 12 főre
+Churros recept - 5 főre
 
 **Transzprotalás:**
 - Dobozban
 
 **Elkészítése:**
-- Reggel kisütöm
+- Csüt délután
