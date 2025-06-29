@@ -40,31 +40,31 @@ Az utazások idején fenntartó, rövidebb programot adok (majd ha kéred).
 
 Mentális ébresztő:
 
-Hidegvízes arcmosás (ha van kedved: hidegzuhany) → Fókusz.
+**Hidegvízes arcmosás** (ha van kedved: hidegzuhany) → Fókusz.
 
-3 perc mély légzés: 4 mp belégzés – 4 mp tartás – 4 mp kilégzés – 4 mp tartás (Box breathing — Navy SEAL technika).
+**3 perc mély légzés**: 4 mp belégzés – 4 mp tartás – 4 mp kilégzés – 4 mp tartás (Box breathing — Navy SEAL technika).
 
-Gondolat: "Erősebb leszek, mint tegnap." (Minden nap.)
-
-
-Futás (változó módon):
-
-Hétfő: 4 km tempós (5 perc/km) → fokozott légzőkapacitás
-
-Kedd: Sprint intervall: 100m max → 100m séta × 10
-
-Szerda: Hegyi futás / domb sprint × 6–8
-
-Csütörtök: 2 km laza + 10 db 50m repülő futás
-
-Péntek: 5 km közepes tempó
-
-Szombat: Sprint létra: 50m – 100m – 150m – 100m – 50m (max sebesség)
-
-Vasárnap: OFF vagy séta 5 km (regeneráció)
+**Gondolat**: "Erősebb leszek, mint tegnap." (Minden nap.)
 
 
-Mobility (15 perc):
+**Futás** (változó módon):
+
+**Hétfő**: 4 km tempós (5 perc/km) → fokozott légzőkapacitás
+
+**Kedd**: Sprint intervall: 100m max → 100m séta × 10
+
+**Szerda**: Hosszu távú futás 8km
+
+**Csütörtök**: 2 km laza + 10 db 50m repülő futás
+
+**Péntek**: 5 km közepes tempó
+
+**Szombat**: Sprint létra: 50m – 100m – 150m – 100m – 50m (max sebesség)
+
+**Vasárnap**: OFF vagy séta 5 km (regeneráció)
+
+
+**Mobility** (15 perc):
 Dinamikus nyújtások, csípő, váll, boka mobilizáció.
 
 
