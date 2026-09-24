@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Installs Drop Shelf for the current user (no sudo needed unless deps are missing).
 #
-#   ./install.sh                      default shortcut: Ctrl+Alt+D
-#   SHORTCUT='<Super>z' ./install.sh  pick your own shortcut
+#   ./install.sh                      picks a free shortcut (Super+Z if free)
+#   SHORTCUT='<Super>x' ./install.sh  pick your own shortcut
 set -euo pipefail
 
-SHORTCUT="${SHORTCUT:-<Primary><Alt>d}"
+# Tried in order; the first one not already used by the desktop wins.
+CANDIDATES="<Super>z <Primary><Alt>z <Primary><Super>s <Primary><Alt>space"
+SHORTCUT="${SHORTCUT:-}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$HOME/.local/share/drop-shelf"
 BIN="$HOME/.local/bin/drop-shelf"
@@ -82,29 +84,65 @@ CMD="$BIN --toggle"
 shortcut_done=0
 
 if command -v gsettings >/dev/null 2>&1 && gsettings list-schemas | grep -qx org.cinnamon.desktop.keybindings; then
-    say "Registering Cinnamon shortcut $SHORTCUT"
-    /usr/bin/python3 - "$CMD" "$SHORTCUT" <<'PY'
-import ast, subprocess, sys
-cmd, shortcut = sys.argv[1], sys.argv[2]
+    SHORTCUT="$(/usr/bin/python3 - "$CMD" "$SHORTCUT" "$CANDIDATES" <<'PY'
+import ast, re, subprocess, sys
+cmd, wanted, candidates = sys.argv[1], sys.argv[2], sys.argv[3].split()
 schema = "org.cinnamon.desktop.keybindings"
 base = "/org/cinnamon/desktop/keybindings/custom-keybindings/"
 custom = "org.cinnamon.desktop.keybindings.custom-keybinding"
 
-def get(schema_path, key):
-    return subprocess.run(["gsettings", "get", schema_path, key],
-                          capture_output=True, text=True).stdout.strip()
+def run(*args):
+    return subprocess.run(["gsettings", *args], capture_output=True, text=True).stdout.strip()
 
 def gset(schema_path, key, value):
     subprocess.run(["gsettings", "set", schema_path, key, value], check=True)
 
-raw = get(schema, "custom-list")
-names = ast.literal_eval(raw.replace("@as ", "")) if raw else []
-# Reuse our own slot if we installed before, otherwise take a free customN.
+def parse_list(raw):
+    raw = raw.replace("@as ", "")
+    try:
+        value = ast.literal_eval(raw) if raw else []
+    except (ValueError, SyntaxError):
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+ALIASES = {"control": "ctrl", "ctrl": "ctrl", "primary": "ctrl", "alt": "alt", "mod1": "alt",
+           "super": "super", "mod4": "super", "shift": "shift", "meta": "meta", "hyper": "hyper"}
+
+def norm(accel):
+    mods = frozenset(ALIASES.get(m.lower(), m.lower()) for m in re.findall(r"<([^>]+)>", accel))
+    key = re.sub(r"<[^>]+>", "", accel).lower()
+    return (mods, key)
+
+names = parse_list(run("get", schema, "custom-list"))
 slot = None
+taken = set()
 for n in names:
-    if get(f"{custom}:{base}{n}/", "command").strip("'").endswith("drop-shelf --toggle"):
-        slot = n
-        break
+    path = f"{custom}:{base}{n}/"
+    if run("get", path, "command").strip("'").endswith("drop-shelf --toggle"):
+        slot = n          # our own entry from an earlier install - reuse it
+        continue
+    taken.update(norm(a) for a in parse_list(run("get", path, "binding")))
+
+# Every built-in Cinnamon / window-manager / media-key shortcut.
+listing = subprocess.run(["gsettings", "list-schemas"], capture_output=True, text=True).stdout.split()
+for s in listing:
+    if s.startswith(("org.cinnamon.desktop.keybindings", "org.cinnamon.muffin.keybindings",
+                     "org.gnome.desktop.wm.keybindings")) and s != custom:
+        for line in run("list-recursively", s).splitlines():
+            for accel in re.findall(r"'([^']*<[^']+>[^']*)'", line):
+                taken.add(norm(accel))
+
+if wanted:
+    shortcut = wanted
+    if norm(wanted) in taken:
+        print(f"!! {wanted} is already used by another shortcut - it may not work", file=sys.stderr)
+else:
+    free = [c for c in candidates if norm(c) not in taken]
+    if not free:
+        print("!! all default shortcuts are taken, set one manually", file=sys.stderr)
+        sys.exit(0)
+    shortcut = free[0]
+
 if slot is None:
     i = 0
     while f"custom{i}" in names:
@@ -120,9 +158,12 @@ except subprocess.CalledProcessError:
 if slot not in names:
     names.append(slot)
     gset(schema, "custom-list", repr(names))
+print(shortcut)
 PY
-    shortcut_done=1
+)"
+    [ -n "$SHORTCUT" ] && shortcut_done=1 && say "Registered Cinnamon shortcut $SHORTCUT"
 elif command -v gsettings >/dev/null 2>&1 && gsettings list-schemas | grep -qx org.mate.control-center.keybinding; then
+    SHORTCUT="${SHORTCUT:-${CANDIDATES%% *}}"
     say "Registering MATE shortcut $SHORTCUT"
     path="/org/mate/desktop/keybindings/drop-shelf/"
     gsettings set "org.mate.control-center.keybinding:$path" name "Drop Shelf"
@@ -130,6 +171,7 @@ elif command -v gsettings >/dev/null 2>&1 && gsettings list-schemas | grep -qx o
     gsettings set "org.mate.control-center.keybinding:$path" binding "$SHORTCUT"
     shortcut_done=1
 elif command -v xfconf-query >/dev/null 2>&1; then
+    SHORTCUT="${SHORTCUT:-${CANDIDATES%% *}}"
     say "Registering Xfce shortcut $SHORTCUT"
     xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$SHORTCUT" -n -t string -s "$CMD"
     shortcut_done=1
@@ -140,9 +182,16 @@ if [ "$shortcut_done" = 0 ]; then
     warn "Add it yourself: System Settings > Keyboard > Shortcuts > Custom, command: $CMD"
 fi
 
-# 7. Start it now
+# 7. Start it now (restart it if an older copy is already running)
+"$BIN" --quit >/dev/null 2>&1 || true
+sleep 1
 "$BIN" --hidden >/dev/null 2>&1 &
 disown || true
 
-say "Done! Press ${SHORTCUT} to show or hide the shelf."
+if [ "$shortcut_done" = 1 ]; then
+    NICE="$(echo "$SHORTCUT" | sed 's/<Primary>/Ctrl+/g; s/<Control>/Ctrl+/g; s/<Alt>/Alt+/g; s/<Super>/Super+/g; s/<Shift>/Shift+/g; s/space$/Space/; s/+\([a-z]\)$/+\U\1/')"
+    say "Done! Press ${NICE} to show or hide the shelf (Super is the Windows key)."
+else
+    say "Done!"
+fi
 say "You can also open it from the menu: Drop Shelf"

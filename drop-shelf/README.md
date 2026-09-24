@@ -15,17 +15,19 @@ cd drop-shelf
 That's it. It:
 - adds **Drop Shelf** to your menu
 - starts it quietly in the background on login
-- sets the shortcut **Ctrl+Alt+D** to show or hide the shelf (at your mouse pointer)
+- sets a keyboard shortcut to show or hide the shelf at your mouse pointer. It picks the
+  first one that is not already used: **Super+Z** (Super is the Windows key), otherwise
+  **Ctrl+Alt+Z**. The installer tells you which one it chose.
 - adds **Add to Drop Shelf** to the right-click menu in Nemo (the file manager)
 
-Want a different shortcut? `SHORTCUT='<Super>z' ./install.sh`, or change it later in
+Want a different shortcut? `SHORTCUT='<Super>x' ./install.sh`, or change it later in
 *System Settings → Keyboard → Shortcuts → Custom Shortcuts*.
 
 Uninstall with `./uninstall.sh`.
 
 ## How to use
 
-1. Press **Ctrl+Alt+D**. The shelf pops up where your mouse is.
+1. Press your shortcut (e.g. **Super+Z**). The shelf pops up where your mouse is.
 2. Drop anything on it:
    - **files & folders**: only a reference is kept, nothing gets copied
    - **images from a website**: downloaded
