@@ -10,9 +10,16 @@ Usage:
     drop-shelf --hidden     start in the background (used for autostart)
     drop-shelf FILE...      put files on the shelf and show it
     drop-shelf --quit       quit the running shelf
+    drop-shelf --shortcut   print the keyboard shortcut in use
+
+The shortcut can be changed in ~/.config/drop-shelf/settings.ini:
+    [shelf]
+    shortcut=<Super>x
 """
 
 import base64
+import ctypes
+import ctypes.util
 import mimetypes
 import os
 import re
@@ -32,6 +39,9 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango  # noqa: E402
 APP_ID = "io.github.dropshelf.DropShelf"
 TEMP_DIR = os.path.join(GLib.get_user_cache_dir(), "drop-shelf")
 CONFIG_FILE = os.path.join(GLib.get_user_config_dir(), "drop-shelf", "settings.ini")
+ACTIVE_SHORTCUT_FILE = os.path.join(GLib.get_user_config_dir(), "drop-shelf", "active-shortcut")
+# Tried in order; the first one no other program is using wins.
+DEFAULT_SHORTCUTS = ["<Super>z", "<Primary><Alt>z", "<Primary><Super>s", "<Primary><Alt>space"]
 ICON_SIZE = 64
 CHECK_INTERVAL_MS = 1500
 
@@ -171,6 +181,136 @@ def target_list(names):
 
 
 # --------------------------------------------------------------------------
+# global keyboard shortcut
+# --------------------------------------------------------------------------
+
+class GlobalHotkey:
+    """Grabs one key combination directly on the X server.
+
+    This works no matter what the desktop's shortcut settings say. If another
+    program already owns a combination, the grab fails and the next one is tried.
+    """
+
+    KEY_PRESS = 2
+    GRAB_MODE_ASYNC = 1
+    LOCK_MASK = 1 << 1       # Caps Lock
+    MOD2_MASK = 1 << 4       # Num Lock
+    ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+    def __init__(self, callback):
+        self.callback = callback
+        self.x = None
+        self.display = None
+        self.active = None
+        self._grabbed = None
+        self._failed = False
+        self._last_press = 0.0
+        if not os.environ.get("DISPLAY"):
+            return
+        name = ctypes.util.find_library("X11")
+        if not name:
+            return
+        try:
+            x = ctypes.cdll.LoadLibrary(name)
+        except OSError:
+            return
+        vp, ul, ui, i = ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_int
+        x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = vp, [ctypes.c_char_p]
+        x.XDefaultRootWindow.restype, x.XDefaultRootWindow.argtypes = ul, [vp]
+        x.XKeysymToKeycode.restype, x.XKeysymToKeycode.argtypes = ctypes.c_ubyte, [vp, ul]
+        x.XGrabKey.argtypes = [vp, i, ui, ul, i, i, i]
+        x.XUngrabKey.argtypes = [vp, i, ui, ul]
+        x.XSync.argtypes = [vp, i]
+        x.XFlush.argtypes = [vp]
+        x.XPending.restype, x.XPending.argtypes = i, [vp]
+        x.XNextEvent.argtypes = [vp, vp]
+        x.XConnectionNumber.restype, x.XConnectionNumber.argtypes = i, [vp]
+        x.XSetErrorHandler.restype, x.XSetErrorHandler.argtypes = vp, [vp]
+        display = x.XOpenDisplay(None)
+        if not display:
+            return
+        self.x, self.display = x, display
+        self.root = x.XDefaultRootWindow(display)
+        self._on_error_cb = self.ERROR_HANDLER(self._on_error)
+
+    def _on_error(self, _display, _event):
+        self._failed = True
+        return 0
+
+    def _x_modifiers(self, gdk_mods):
+        m = Gdk.ModifierType
+        xmods = 0
+        if gdk_mods & m.SHIFT_MASK:
+            xmods |= 1 << 0
+        if gdk_mods & m.CONTROL_MASK:
+            xmods |= 1 << 2
+        if gdk_mods & m.MOD1_MASK:
+            xmods |= 1 << 3
+        if gdk_mods & (m.SUPER_MASK | m.MOD4_MASK):
+            xmods |= 1 << 6
+        return xmods
+
+    def _variants(self, xmods):
+        return [xmods | extra for extra in (0, self.LOCK_MASK, self.MOD2_MASK,
+                                            self.LOCK_MASK | self.MOD2_MASK)]
+
+    def _grab(self, accel):
+        keyval, mods = Gtk.accelerator_parse(accel)
+        if not keyval:
+            return False
+        keycode = self.x.XKeysymToKeycode(self.display, keyval)
+        if not keycode:
+            return False
+        xmods = self._x_modifiers(mods)
+        self._failed = False
+        previous = self.x.XSetErrorHandler(ctypes.cast(self._on_error_cb, ctypes.c_void_p))
+        for variant in self._variants(xmods):
+            self.x.XGrabKey(self.display, keycode, variant, self.root, 0,
+                            self.GRAB_MODE_ASYNC, self.GRAB_MODE_ASYNC)
+        self.x.XSync(self.display, 0)
+        if self._failed:
+            for variant in self._variants(xmods):
+                self.x.XUngrabKey(self.display, keycode, variant, self.root)
+            self.x.XSync(self.display, 0)
+        self.x.XSetErrorHandler(previous)
+        if self._failed:
+            return False
+        self._grabbed = (keycode, xmods)
+        return True
+
+    def start(self, candidates):
+        """Grab the first free combination; returns it, or None."""
+        if self.display is None:
+            return None
+        for accel in candidates:
+            if self._grab(accel):
+                self.active = accel
+                GLib.io_add_watch(self.x.XConnectionNumber(self.display), GLib.PRIORITY_DEFAULT,
+                                  GLib.IOCondition.IN, self._on_x_event)
+                self._on_x_event()
+                return accel
+        return None
+
+    def _on_x_event(self, *_):
+        event = ctypes.create_string_buffer(256)
+        while self.x.XPending(self.display):
+            self.x.XNextEvent(self.display, event)
+            if ctypes.c_int.from_buffer(event).value == self.KEY_PRESS:
+                now = time.monotonic()
+                if now - self._last_press > 0.3:     # ignore key auto-repeat
+                    self._last_press = now
+                    GLib.idle_add(lambda: self.callback() and False)
+                else:
+                    self._last_press = now
+        return True
+
+
+def pretty_accel(accel):
+    keyval, mods = Gtk.accelerator_parse(accel or "")
+    return Gtk.accelerator_get_label(keyval, mods) if keyval else (accel or "")
+
+
+# --------------------------------------------------------------------------
 # settings
 # --------------------------------------------------------------------------
 
@@ -196,6 +336,10 @@ class Settings:
     def __setitem__(self, key, value):
         self.values[key] = value
         kf = GLib.KeyFile()
+        try:   # keep keys we don't manage here, like "shortcut"
+            kf.load_from_file(CONFIG_FILE, GLib.KeyFileFlags.KEEP_COMMENTS)
+        except GLib.Error:
+            pass
         for k, v in self.values.items():
             kf.set_boolean("shelf", k, v)
         try:
@@ -830,15 +974,30 @@ class DropShelfApp(Gtk.Application):
             Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.window = ShelfWindow(self)
 
+        kf = GLib.KeyFile()
+        try:
+            kf.load_from_file(CONFIG_FILE, GLib.KeyFileFlags.NONE)
+            wanted = kf.get_string("shelf", "shortcut").strip() or None
+        except GLib.Error:
+            wanted = None
+        self.hotkey = GlobalHotkey(self.window.toggle)
+        active = self.hotkey.start([wanted] if wanted else DEFAULT_SHORTCUTS)
+        if active is None:
+            print(f"drop-shelf: could not use the shortcut {wanted or DEFAULT_SHORTCUTS[0]} "
+                  "(taken by another program?)", file=sys.stderr)
+        try:
+            os.makedirs(os.path.dirname(ACTIVE_SHORTCUT_FILE), exist_ok=True)
+            with open(ACTIVE_SHORTCUT_FILE, "w", encoding="utf-8") as f:
+                f.write(pretty_accel(active) if active else "none")
+        except OSError:
+            pass
+
     def do_command_line(self, command_line):
         args = command_line.get_arguments()[1:]
         cwd = command_line.get_cwd() or os.getcwd()
         flags = {a for a in args if a.startswith("--")}
         files = [a for a in args if not a.startswith("--")]
 
-        if "--help" in flags or "-h" in args:
-            command_line.print_(__doc__)
-            return 0
         if "--quit" in flags:
             self.quit()
             return 0
@@ -864,6 +1023,16 @@ class DropShelfApp(Gtk.Application):
 
 
 def main():
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__)
+        return 0
+    if "--shortcut" in sys.argv:
+        try:
+            with open(ACTIVE_SHORTCUT_FILE, encoding="utf-8") as f:
+                print(f.read().strip())
+        except OSError:
+            print("none (is Drop Shelf running?)")
+        return 0
     return DropShelfApp().run(sys.argv)
 
 

@@ -20,7 +20,7 @@ if original is not None:
 PY
 fi
 
-rm -rf "$HOME/.local/share/quick-notes/app"
+rm -rf "$HOME/.local/share/quick-notes/app" "$HOME/.config/quick-notes"
 rm -f "$BIN" \
       "$HOME/.local/share/applications/quick-notes.desktop" \
       "$HOME/.config/autostart/quick-notes.desktop"

@@ -1,7 +1,7 @@
 # Quick Notes
 
 Post-it notes for Linux Mint. Press **Ctrl+Alt+N**, a small note pops up at your mouse,
-write your thought, and it stays on top of your screen until you delete it.
+write your thought, press **Enter**, and it stays on top of your screen until you delete it.
 
 ## Install
 
@@ -13,8 +13,17 @@ cd quick-notes
 The installer:
 - adds **Quick Notes** to your menu
 - starts it on login, so your notes come back after a restart
-- sets the shortcut **Ctrl+Alt+N**. If that one is already taken on your computer, it picks
-  a free one and tells you which.
+- sets up the shortcut **Ctrl+Alt+N**. If another program already uses it, the app picks the
+  next free one (Super+N, Ctrl+Alt+J, ...). The installer tells you which one you got, and
+  `quick-notes --shortcut` shows it any time.
+
+Want a different shortcut? `SHORTCUT='<Super>n' ./install.sh`, or put it in
+`~/.config/quick-notes/settings.ini`:
+
+```ini
+[quick-notes]
+shortcut=<Primary><Alt>k
+```
 
 Uninstall with `./uninstall.sh`. Your notes are kept unless you run `./uninstall.sh --delete-notes`.
 
@@ -23,14 +32,17 @@ Uninstall with `./uninstall.sh`. Your notes are kept unless you run `./uninstall
 | Control | What it does |
 |---|---|
 | Ctrl+Alt+N | new note at the mouse pointer |
+| Enter | finish the note: it becomes read-only |
+| Shift+Enter | new line |
+| double-click | edit a finished note again |
 | **+** | another new note |
 | dot button | change color: yellow, pink, green, blue, orange, purple or white. New notes use the color you picked last |
 | lock button | show this note on the lock screen (as the lock screen message) |
 | **x** | delete the note right away |
 | **B** / Ctrl+B | bold |
 | *I* / Ctrl+I | italic |
-| checkbox / Ctrl+T | turn the line into a checkbox. Click the box to tick it off |
-| Enter in a checkbox list | next line gets a checkbox too. Press Enter on an empty one to end the list |
+| checkbox / Ctrl+T | turn the line into a checkbox. Click the box to tick it off (works on finished notes too) |
+| Shift+Enter in a checkbox list | next line gets a checkbox too. Press it on an empty one to end the list |
 | Ctrl+N | new note |
 | top bar | drag it to move the note |
 | bottom-right corner | resize |

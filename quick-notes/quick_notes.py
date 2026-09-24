@@ -7,14 +7,23 @@ Usage:
     quick-notes --restore   only bring back saved notes (used for autostart)
     quick-notes --show      bring all notes to the front
     quick-notes --quit      close the app (notes are kept)
+    quick-notes --shortcut  print the keyboard shortcut in use
 
 Inside a note:
+    Enter finishes the note (double-click to edit again), Shift+Enter new line
     Ctrl+B bold, Ctrl+I italic, Ctrl+T checkbox, Ctrl+N new note
+
+The shortcut can be changed in ~/.config/quick-notes/settings.ini:
+    [quick-notes]
+    shortcut=<Super>n
 """
 
+import ctypes
+import ctypes.util
 import json
 import os
 import sys
+import time
 import uuid
 
 import gi
@@ -31,6 +40,11 @@ except (ValueError, ImportError):
 
 APP_ID = "io.github.quicknotes.QuickNotes"
 DATA_FILE = os.path.join(GLib.get_user_data_dir(), "quick-notes", "notes.json")
+SETTINGS_FILE = os.path.join(GLib.get_user_config_dir(), "quick-notes", "settings.ini")
+ACTIVE_SHORTCUT_FILE = os.path.join(GLib.get_user_config_dir(), "quick-notes", "active-shortcut")
+# Tried in order; the first one no other program is using wins.
+DEFAULT_SHORTCUTS = ["<Primary><Alt>n", "<Super>n", "<Primary><Alt>j", "<Primary><Super>n"]
+DOUBLE_CLICK = getattr(Gdk.EventType, "DOUBLE_BUTTON_PRESS", None) or getattr(Gdk.EventType, "_2BUTTON_PRESS")
 LOCK_SCHEMA = "org.cinnamon.desktop.screensaver"
 LOCK_KEY = "default-message"
 
@@ -71,6 +85,7 @@ window.note { background-color: transparent; }
 .note button:hover { background-color: rgba(0,0,0,0.09); }
 .note button:checked { background-color: rgba(0,0,0,0.17); }
 .note .grip { color: rgba(0,0,0,0.35); padding: 0 3px; }
+.note .hint { color: rgba(0,0,0,0.4); font-size: small; padding: 3px 4px; }
 .swatch { min-width: 16px; min-height: 16px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.3); }
 """
     for name, (body, header) in COLORS.items():
@@ -111,6 +126,136 @@ def flat_button(label=None, icon_names=(), tooltip="", toggle=False, markup=Fals
 
 
 # --------------------------------------------------------------------------
+# global keyboard shortcut
+# --------------------------------------------------------------------------
+
+class GlobalHotkey:
+    """Grabs one key combination directly on the X server.
+
+    This works no matter what the desktop's shortcut settings say. If another
+    program already owns a combination, the grab fails and the next one is tried.
+    """
+
+    KEY_PRESS = 2
+    GRAB_MODE_ASYNC = 1
+    LOCK_MASK = 1 << 1       # Caps Lock
+    MOD2_MASK = 1 << 4       # Num Lock
+    ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+    def __init__(self, callback):
+        self.callback = callback
+        self.x = None
+        self.display = None
+        self.active = None
+        self._grabbed = None
+        self._failed = False
+        self._last_press = 0.0
+        if not os.environ.get("DISPLAY"):
+            return
+        name = ctypes.util.find_library("X11")
+        if not name:
+            return
+        try:
+            x = ctypes.cdll.LoadLibrary(name)
+        except OSError:
+            return
+        vp, ul, ui, i = ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_int
+        x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = vp, [ctypes.c_char_p]
+        x.XDefaultRootWindow.restype, x.XDefaultRootWindow.argtypes = ul, [vp]
+        x.XKeysymToKeycode.restype, x.XKeysymToKeycode.argtypes = ctypes.c_ubyte, [vp, ul]
+        x.XGrabKey.argtypes = [vp, i, ui, ul, i, i, i]
+        x.XUngrabKey.argtypes = [vp, i, ui, ul]
+        x.XSync.argtypes = [vp, i]
+        x.XFlush.argtypes = [vp]
+        x.XPending.restype, x.XPending.argtypes = i, [vp]
+        x.XNextEvent.argtypes = [vp, vp]
+        x.XConnectionNumber.restype, x.XConnectionNumber.argtypes = i, [vp]
+        x.XSetErrorHandler.restype, x.XSetErrorHandler.argtypes = vp, [vp]
+        display = x.XOpenDisplay(None)
+        if not display:
+            return
+        self.x, self.display = x, display
+        self.root = x.XDefaultRootWindow(display)
+        self._on_error_cb = self.ERROR_HANDLER(self._on_error)
+
+    def _on_error(self, _display, _event):
+        self._failed = True
+        return 0
+
+    def _x_modifiers(self, gdk_mods):
+        m = Gdk.ModifierType
+        xmods = 0
+        if gdk_mods & m.SHIFT_MASK:
+            xmods |= 1 << 0
+        if gdk_mods & m.CONTROL_MASK:
+            xmods |= 1 << 2
+        if gdk_mods & m.MOD1_MASK:
+            xmods |= 1 << 3
+        if gdk_mods & (m.SUPER_MASK | m.MOD4_MASK):
+            xmods |= 1 << 6
+        return xmods
+
+    def _variants(self, xmods):
+        return [xmods | extra for extra in (0, self.LOCK_MASK, self.MOD2_MASK,
+                                            self.LOCK_MASK | self.MOD2_MASK)]
+
+    def _grab(self, accel):
+        keyval, mods = Gtk.accelerator_parse(accel)
+        if not keyval:
+            return False
+        keycode = self.x.XKeysymToKeycode(self.display, keyval)
+        if not keycode:
+            return False
+        xmods = self._x_modifiers(mods)
+        self._failed = False
+        previous = self.x.XSetErrorHandler(ctypes.cast(self._on_error_cb, ctypes.c_void_p))
+        for variant in self._variants(xmods):
+            self.x.XGrabKey(self.display, keycode, variant, self.root, 0,
+                            self.GRAB_MODE_ASYNC, self.GRAB_MODE_ASYNC)
+        self.x.XSync(self.display, 0)
+        if self._failed:
+            for variant in self._variants(xmods):
+                self.x.XUngrabKey(self.display, keycode, variant, self.root)
+            self.x.XSync(self.display, 0)
+        self.x.XSetErrorHandler(previous)
+        if self._failed:
+            return False
+        self._grabbed = (keycode, xmods)
+        return True
+
+    def start(self, candidates):
+        """Grab the first free combination; returns it, or None."""
+        if self.display is None:
+            return None
+        for accel in candidates:
+            if self._grab(accel):
+                self.active = accel
+                GLib.io_add_watch(self.x.XConnectionNumber(self.display), GLib.PRIORITY_DEFAULT,
+                                  GLib.IOCondition.IN, self._on_x_event)
+                self._on_x_event()
+                return accel
+        return None
+
+    def _on_x_event(self, *_):
+        event = ctypes.create_string_buffer(256)
+        while self.x.XPending(self.display):
+            self.x.XNextEvent(self.display, event)
+            if ctypes.c_int.from_buffer(event).value == self.KEY_PRESS:
+                now = time.monotonic()
+                if now - self._last_press > 0.3:     # ignore key auto-repeat
+                    self._last_press = now
+                    GLib.idle_add(lambda: self.callback() and False)
+                else:
+                    self._last_press = now
+        return True
+
+
+def pretty_accel(accel):
+    keyval, mods = Gtk.accelerator_parse(accel or "")
+    return Gtk.accelerator_get_label(keyval, mods) if keyval else (accel or "")
+
+
+# --------------------------------------------------------------------------
 # one note
 # --------------------------------------------------------------------------
 
@@ -121,6 +266,7 @@ class Note(Gtk.Window):
         self.id = data.get("id") or uuid.uuid4().hex
         self.color = data.get("color") if data.get("color") in COLORS else DEFAULT_COLOR
         self.lock = bool(data.get("lock"))
+        self.finished = bool(data.get("finished"))
         self.typing_bold = False
         self.typing_italic = False
         self.internal = False     # True while we change the text ourselves
@@ -210,17 +356,30 @@ class Note(Gtk.Window):
         footer.get_style_context().add_class("note-footer")
         frame.pack_start(footer, False, False, 0)
 
+        # Formatting buttons - hidden while the note is finished.
+        self.tools = Gtk.Box(spacing=0)
+        footer.pack_start(self.tools, False, False, 0)
+
         self.bold_button = flat_button("<b>B</b>", (), "Bold (Ctrl+B)", toggle=True, markup=True)
         self.bold_id = self.bold_button.connect("toggled", lambda *_: self.toggle_style("bold"))
-        footer.pack_start(self.bold_button, False, False, 0)
+        self.tools.pack_start(self.bold_button, False, False, 0)
 
         self.italic_button = flat_button("<i>I</i>", (), "Italic (Ctrl+I)", toggle=True, markup=True)
         self.italic_id = self.italic_button.connect("toggled", lambda *_: self.toggle_style("italic"))
-        footer.pack_start(self.italic_button, False, False, 0)
+        self.tools.pack_start(self.italic_button, False, False, 0)
 
         box_button = flat_button(BOX_DONE, (), "Checkbox (Ctrl+T)")
         box_button.connect("clicked", lambda *_: self.toggle_checkbox_lines())
-        footer.pack_start(box_button, False, False, 0)
+        self.tools.pack_start(box_button, False, False, 0)
+
+        for child in self.tools.get_children():
+            child.show_all()
+        self.tools.set_no_show_all(True)
+
+        self.hint = Gtk.Label(label="double-click to edit")
+        self.hint.get_style_context().add_class("hint")
+        self.hint.set_no_show_all(True)
+        footer.pack_start(self.hint, False, False, 4)
 
         grip = Gtk.EventBox()
         grip_label = Gtk.Label(label="◢")
@@ -235,6 +394,7 @@ class Note(Gtk.Window):
         self.buffer.connect_after("insert-text", self._on_insert_text)
         self.buffer.connect("changed", self._on_changed)
         self.buffer.connect("mark-set", self._on_mark_set)
+        self._apply_finished()
 
     def _color_menu(self):
         menu = Gtk.Menu()
@@ -268,7 +428,8 @@ class Note(Gtk.Window):
         x, y = self.get_position()
         w, h = self.get_size()
         return {"id": self.id, "x": x, "y": y, "w": w, "h": h,
-                "color": self.color, "lock": self.lock, "runs": self._runs()}
+                "color": self.color, "lock": self.lock, "finished": self.finished,
+                "runs": self._runs()}
 
     def _runs(self):
         runs = []
@@ -407,13 +568,43 @@ class Note(Gtk.Window):
                 if s.compare(le) < 0:
                     self.buffer.apply_tag(self.tag_done, s, le)
 
-    def _on_text_click(self, view, event):
-        if event.type != Gdk.EventType.BUTTON_PRESS or event.button != 1:
-            return False
+    # ---------------------------------------------------------------- finished (read-only) notes
+    def _apply_finished(self):
+        self.view.set_editable(not self.finished)
+        self.view.set_cursor_visible(not self.finished)
+        self.tools.set_visible(not self.finished)
+        self.hint.set_visible(self.finished)
+
+    def set_finished(self, finished):
+        self.finished = finished
+        if finished:
+            cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert())
+            self.buffer.place_cursor(cursor)       # drop any selection
+        self._apply_finished()
+        self.app.save_soon()
+
+    def _iter_at_event(self, view, event):
         bx, by = view.window_to_buffer_coords(Gtk.TextWindowType.TEXT, int(event.x), int(event.y))
         result = view.get_iter_at_location(bx, by)
-        it = result[1] if isinstance(result, tuple) else result
-        if isinstance(result, tuple) and not result[0]:
+        if isinstance(result, tuple):
+            return (result[1] if result[0] else None), bx
+        return result, bx
+
+    def _on_text_click(self, view, event):
+        if event.button != 1:
+            return False
+        if event.type == DOUBLE_CLICK and self.finished:
+            self.set_finished(False)
+            it, _bx = self._iter_at_event(view, event)
+            offset = it.get_offset() if it is not None else self.buffer.get_char_count()
+            # After GTK's own double-click handling (which selects a word), put the cursor there.
+            GLib.idle_add(lambda: self.buffer.place_cursor(self.buffer.get_iter_at_offset(offset)) or False)
+            view.grab_focus()
+            return True
+        if event.type != Gdk.EventType.BUTTON_PRESS:
+            return False
+        it, bx = self._iter_at_event(view, event)
+        if it is None:
             return False
         if it.get_line_offset() != 0 or it.get_char() not in BOXES:
             return False
@@ -433,10 +624,16 @@ class Note(Gtk.Window):
         return True
 
     def _on_text_key(self, _view, event):
-        if event.keyval not in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+        if event.keyval not in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) or self.finished:
             return False
-        if event.state & (Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.CONTROL_MASK):
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
             return False
+        if not event.state & Gdk.ModifierType.SHIFT_MASK:
+            # Plain Enter: the note is done.
+            if self.plain_text().strip():
+                self.set_finished(True)
+            return True
+        # Shift+Enter: new line (and the next checkbox inside a checkbox list).
         cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert())
         start = self._line_start(cursor.get_line())
         if self._line_prefix(start) not in PREFIXES:
@@ -461,6 +658,8 @@ class Note(Gtk.Window):
         if not event.state & Gdk.ModifierType.CONTROL_MASK:
             return False
         key = Gdk.keyval_to_lower(event.keyval)
+        if self.finished and key in (Gdk.KEY_b, Gdk.KEY_i, Gdk.KEY_t):
+            return True
         if key == Gdk.KEY_b:
             self.toggle_style("bold")
         elif key == Gdk.KEY_i:
@@ -512,6 +711,7 @@ class QuickNotesApp(Gtk.Application):
         self.lock_original = None
         self._save_id = 0
         self._lock_id = 0
+        self.hotkey = None
 
     # ---------------------------------------------------------------- lifecycle
     def do_startup(self):
@@ -530,18 +730,39 @@ class QuickNotesApp(Gtk.Application):
             self.notes.append(note)
             note.show_all()
 
+        self.hotkey = GlobalHotkey(self.new_note)
+        wanted = self._configured_shortcut()
+        active = self.hotkey.start([wanted] if wanted else DEFAULT_SHORTCUTS)
+        if active is None:
+            print(f"quick-notes: could not use the shortcut {wanted or DEFAULT_SHORTCUTS[0]} "
+                  "(taken by another program?)", file=sys.stderr)
+        try:
+            os.makedirs(os.path.dirname(ACTIVE_SHORTCUT_FILE), exist_ok=True)
+            with open(ACTIVE_SHORTCUT_FILE, "w", encoding="utf-8") as f:
+                f.write(pretty_accel(active) if active else "none")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _configured_shortcut():
+        kf = GLib.KeyFile()
+        try:
+            kf.load_from_file(SETTINGS_FILE, GLib.KeyFileFlags.NONE)
+            return kf.get_string("quick-notes", "shortcut").strip() or None
+        except GLib.Error:
+            return None
+
     def do_shutdown(self):
         self.save_now()
         Gtk.Application.do_shutdown(self)
 
     def do_command_line(self, command_line):
         args = set(command_line.get_arguments()[1:])
-        if "--help" in args or "-h" in args:
-            command_line.print_(__doc__)
-        elif "--quit" in args:
+        if "--quit" in args:
             self.quit()
         elif "--restore" in args:
             pass
+
         elif "--show" in args:
             for note in self.notes:
                 note.present()
@@ -658,6 +879,16 @@ class QuickNotesApp(Gtk.Application):
 
 
 def main():
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__)
+        return 0
+    if "--shortcut" in sys.argv:
+        try:
+            with open(ACTIVE_SHORTCUT_FILE, encoding="utf-8") as f:
+                print(f.read().strip())
+        except OSError:
+            print("none (is Quick Notes running?)")
+        return 0
     return QuickNotesApp().run(sys.argv)
 
 

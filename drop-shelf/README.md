@@ -15,13 +15,14 @@ cd drop-shelf
 That's it. It:
 - adds **Drop Shelf** to your menu
 - starts it quietly in the background on login
-- sets a keyboard shortcut to show or hide the shelf at your mouse pointer. It picks the
-  first one that is not already used: **Super+Z** (Super is the Windows key), otherwise
-  **Ctrl+Alt+Z**. The installer tells you which one it chose.
+- sets up a keyboard shortcut to show or hide the shelf at your mouse pointer:
+  **Super+Z** (Super is the Windows key). If another program already uses it, the app picks
+  the next free one (Ctrl+Alt+Z, ...). The installer tells you which one you got, and
+  `drop-shelf --shortcut` shows it any time.
 - adds **Add to Drop Shelf** to the right-click menu in Nemo (the file manager)
 
-Want a different shortcut? `SHORTCUT='<Super>x' ./install.sh`, or change it later in
-*System Settings → Keyboard → Shortcuts → Custom Shortcuts*.
+Want a different shortcut? `SHORTCUT='<Super>x' ./install.sh`, or put it in
+`~/.config/drop-shelf/settings.ini` under `[shelf]` as `shortcut=<Super>x` and restart the app.
 
 Uninstall with `./uninstall.sh`.
 
