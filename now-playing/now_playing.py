@@ -9,6 +9,7 @@ Usage:
     now-playing             open the widget
     now-playing --toggle    show or hide it (handy for a keyboard shortcut)
     now-playing --quit      close it
+    now-playing --debug-queue   print what Spotify reports as the queue
 
 Playback control uses the Spotify desktop app over D-Bus (MPRIS). The queue,
 shuffle, repeat, volume and seeking use the Spotify Web API, which needs a
@@ -908,13 +909,14 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self._skip_pending = 0
         self.bg = DEFAULT_BG
         self.context_uri = None
+        self.autoplay = False
+        self.queue_missed = False
         self.fullscreen_on = False
         self._layout_id = 0
         self._lyrics_offsets = {}
 
         self.set_decorated(False)
-        self.set_keep_above(True)
-        self.set_skip_taskbar_hint(True)
+        self.set_keep_above(self.settings.get_bool("pinned", False))
         self.set_icon_name("multimedia-audio-player")
         self.get_style_context().add_class("np")
         screen = self.get_screen()
@@ -981,6 +983,11 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.lyrics_button.set_can_focus(False)
         self.lyrics_button.connect("clicked", lambda *_: self._toggle_lyrics())
         header.pack_start(self.lyrics_button, False, False, 0)
+
+        self.pin_button = icon_button(["view-pin-symbolic", "emblem-important-symbolic"], "pin",
+                                      "Keep the widget above other windows", 16)
+        self.pin_button.connect("clicked", lambda *_: self.toggle_pin())
+        header.pack_start(self.pin_button, False, False, 0)
 
         settings_button = icon_button(["emblem-system-symbolic", "preferences-system-symbolic"], "⚙",
                                       "Spotify account")
@@ -1103,6 +1110,12 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         refresh.connect("clicked", lambda *_: self._fetch_queue())
         queue_header.pack_start(refresh, False, False, 0)
         left.pack_start(queue_header, False, False, 2)
+        self.queue_note = Gtk.Label(xalign=0)
+        self.queue_note.get_style_context().add_class("np-dim")
+        self.queue_note.set_line_wrap(True)
+        self.queue_note.set_max_width_chars(30)    # wrap instead of widening the column
+        self.queue_note.set_no_show_all(True)
+        left.pack_start(self.queue_note, False, False, 0)
 
         self.queue_stack = Gtk.Stack()
         self.queue_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
@@ -1164,6 +1177,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self._set_pill(self.ascii_button, self.settings.get_bool("ascii", False))
         self.cover.set_ascii(self.settings.get_bool("ascii", False))
         self._set_pill(self.lyrics_button, self.lyrics_button_on())
+        self._set_pill(self.pin_button, self.settings.get_bool("pinned", False))
         self.lyrics.set_visible(self.lyrics_button_on())
 
     # ---------------------------------------------------------------- look
@@ -1272,6 +1286,11 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             self._update_mode_buttons()
 
     def _on_new_track(self, track):
+        # Did Spotify play what its queue said would come next?
+        if self.queue and self.track_key not in (None, "__none__", "__offline__"):
+            expected = self.queue[0]["title"].strip().lower()
+            self.queue_missed = expected != track["title"].strip().lower()
+            self._update_queue_note()
         self.track_key = track["key"]
         self.track = track
         self._set_position(0)
@@ -1389,6 +1408,11 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
                 self.volume_scale.set_value(self.volume)
                 self._updating = False
             self.context_uri = (state.get("context") or {}).get("uri")
+            disallows = (state.get("actions") or {}).get("disallows") or {}
+            autoplay = bool(disallows.get("toggling_shuffle") and disallows.get("toggling_repeat_context"))
+            if autoplay != self.autoplay:
+                self.autoplay = autoplay
+                self._update_queue_note()
             self._update_mode_buttons()
 
         run_async(lambda: self.web.call("GET", "/me/player"), done)
@@ -1503,6 +1527,25 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         step()
         if self._skip_pending:
             GLib.timeout_add(450, step)
+
+    def _update_queue_note(self):
+        if self.autoplay:
+            text = ("Spotify is on autoplay (shuffle and repeat are greyed out). In this mode Spotify "
+                    "reports a different list than the songs it will actually play.")
+        elif self.queue_missed:
+            text = "Spotify played a different song than its list said, so this list may be off."
+        else:
+            text = ""
+        self.queue_note.set_text(text)
+        self.queue_note.set_visible(bool(text))
+
+    def toggle_pin(self):
+        pinned = not self.settings.get_bool("pinned", False)
+        self.settings.set("pinned", pinned)
+        self.set_keep_above(pinned)
+        self._set_pill(self.pin_button, pinned)
+        self.pin_button.set_tooltip_text("Pinned: stays above other windows" if pinned
+                                         else "Keep the widget above other windows")
 
     def _update_connect_ui(self):
         if self.web.connected and self.queue:
@@ -1847,10 +1890,41 @@ class NowPlayingApp(Gtk.Application):
         return 0
 
 
+def debug_queue():
+    """Print exactly what the Spotify Web API reports, to compare with the Spotify app."""
+    web = SpotifyWeb(Settings())
+    if not web.connected:
+        print("Not connected: click the gear button in the widget first.")
+        return 1
+    state = web.call("GET", "/me/player")
+    if state is None:
+        print("Spotify did not answer (network problem or login expired).")
+        return 1
+    if not state:
+        print("Spotify reports no active player. Start playing something first.")
+        return 0
+    item = state.get("item") or {}
+    artists = ", ".join(a.get("name", "") for a in item.get("artists") or [])
+    print(f"Now playing : {item.get('name')} - {artists}")
+    print(f"Context     : {(state.get('context') or {}).get('uri')}")
+    print(f"Shuffle     : {state.get('shuffle_state')}   Repeat: {state.get('repeat_state')}")
+    disallows = (state.get("actions") or {}).get("disallows") or {}
+    print(f"Blocked     : {', '.join(k for k, v in disallows.items() if v) or 'nothing'}")
+    queue = web.call("GET", "/me/player/queue") or {}
+    print("Queue according to the Spotify Web API:")
+    for i, entry in enumerate((queue.get("queue") or [])[:10], 1):
+        names = ", ".join(a.get("name", "") for a in entry.get("artists") or []) or \
+            (entry.get("show") or {}).get("name", "")
+        print(f"  {i:2}. {entry.get('name')} - {names}")
+    return 0
+
+
 def main():
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)
         return 0
+    if "--debug-queue" in sys.argv:
+        return debug_queue()
     return NowPlayingApp().run(sys.argv)
 
 

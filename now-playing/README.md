@@ -1,6 +1,6 @@
 # Now Playing
 
-An always-on-top Spotify widget for Linux Mint: album cover (as a picture or old-school
+A Spotify widget for Linux Mint: album cover (as a picture or old-school
 ASCII art), progress bar, controls, the upcoming songs in your queue, and lyrics that type
 themselves in a little terminal, in sync with the song.
 
@@ -37,6 +37,7 @@ Disconnect any time from the gear button.
 |---|---|
 | **ASCII** | show the cover as green terminal ASCII art |
 | **LYRICS** | show / hide the lyrics terminal |
+| pin | keep the widget above other windows (off by default) |
 | gear | connect / disconnect your Spotify account |
 | fullscreen button / F11 / double-click the top bar | fullscreen (Esc or F11 to leave) |
 | progress bar | click or drag to jump in the song |
@@ -62,6 +63,10 @@ there at all; the terminal says so.
 - The queue is loaded when the song changes (and when you press reload), not constantly:
   Spotify's queue list is unreliable when asked repeatedly, especially with shuffle on.
   With shuffle on, Spotify may still play a different song next than its list says.
+- On **autoplay** (after an album or playlist ends, shuffle and repeat are greyed out in
+  Spotify), Spotify reports a different list than the songs it actually plays. The widget
+  detects this and says so above the list. `now-playing --debug-queue` prints exactly what
+  Spotify reports, to compare with the queue in the Spotify app.
 - Clicking a song in the queue plays it directly inside your current playlist or album.
 - Uninstall with `./uninstall.sh` (add `--forget` to also delete your Spotify login).
 
