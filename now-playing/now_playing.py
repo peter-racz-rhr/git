@@ -116,6 +116,10 @@ window.np { background-color: transparent; }
 .np-frame row:selected { background-color: transparent; }
 .np-frame .np-grip { color: rgba(255,255,255,0.3); padding: 0 4px; }
 .np-frame entry { background-color: rgba(255,255,255,0.1); color: #ffffff; border: none; }
+.np-big .np-title { font-size: 30pt; }
+.np-big .np-artist { font-size: 18pt; }
+.np-big label.np-album { font-size: 14pt; }
+.np-big row label { font-size: 12pt; }
 """
 
 
@@ -245,6 +249,26 @@ def parse_lrc(text):
             lines.append((int((int(minutes) * 60 + float(seconds)) * 1000), words))
     lines.sort(key=lambda item: item[0])
     return lines
+
+
+DOUBLE_CLICK = getattr(Gdk.EventType, "DOUBLE_BUTTON_PRESS", None) or getattr(Gdk.EventType, "_2BUTTON_PRESS")
+
+
+class FlexColumn(Gtk.Box):
+    """A vertical box whose preferred width follows the window, but that can still shrink."""
+
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.natural = 440
+
+    def do_get_preferred_width(self):
+        minimum, _natural = Gtk.Box.do_get_preferred_width(self)
+        return minimum, max(minimum, self.natural)
+
+    def set_natural(self, width):
+        if width != self.natural:
+            self.natural = width
+            self.queue_resize()
 
 
 # --------------------------------------------------------------------------
@@ -431,15 +455,22 @@ class SpotifyWeb:
             self._store(json.loads(body))
             return self.token["access_token"]
 
-    def call(self, method, path, params=None):
+    def call(self, method, path, params=None, body=None):
         """Returns parsed JSON, {} for an empty success, or None on failure."""
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
+        headers = {}
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        else:
+            data = b"" if method in ("PUT", "POST") else None
         for attempt in (0, 1):
             token = self._access_token(force_refresh=attempt == 1)
             if token is None:
                 return None
-            status, body, _ = http_request(method, url, headers={"Authorization": f"Bearer {token}"},
-                                           data=b"" if method in ("PUT", "POST") else None)
+            status, body_bytes, _ = http_request(method, url, data=data,
+                                                 headers={"Authorization": f"Bearer {token}", **headers})
+            body = body_bytes
             if status == 401 and attempt == 0:
                 continue
             if status in (200, 201):
@@ -565,16 +596,30 @@ class Mpris:
 # --------------------------------------------------------------------------
 
 class CoverView(Gtk.DrawingArea):
-    SIZE = 230
+    MIN = 72
 
     def __init__(self):
         super().__init__()
-        self.set_size_request(self.SIZE, self.SIZE)
+        self.natural = 230
         self.pixbuf = None
         self.ascii = False
         self._scaled = None
         self._ascii_cache = None
         self.connect("draw", self._draw)
+
+    def do_get_preferred_width(self):
+        return self.MIN, max(self.MIN, self.natural)
+
+    def do_get_preferred_height(self):
+        return self.MIN, max(self.MIN, self.natural)
+
+    def do_get_request_mode(self):
+        return Gtk.SizeRequestMode.CONSTANT_SIZE
+
+    def set_natural(self, size):
+        if size != self.natural:
+            self.natural = size
+            self.queue_resize()
 
     def set_pixbuf(self, pixbuf):
         self.pixbuf = pixbuf
@@ -668,7 +713,10 @@ class LyricsTerminal(Gtk.DrawingArea):
     def __init__(self, position_source):
         super().__init__()
         self.position = position_source
-        self.set_size_request(360, -1)
+        self.set_size_request(170, -1)
+        self.font_size = 10.5
+        self.offset_ms = 0
+        self._flash = ("", 0.0)
         self.state = "idle"            # idle | loading | synced | plain | none | instrumental | offline
         self.lines = []
         self.title = ""
@@ -690,6 +738,14 @@ class LyricsTerminal(Gtk.DrawingArea):
     def set_lyrics(self, state, lines):
         self.state = state
         self.lines = lines
+
+    def flash(self, text):
+        self._flash = (text, time.monotonic() + 1.6)
+
+    def shift(self, delta_ms):
+        self.offset_ms += delta_ms
+        seconds = self.offset_ms / 1000
+        self.flash(f"lyrics timing {seconds:+.2f}s" if self.offset_ms else "lyrics timing reset")
 
     def _items(self, pos_ms):
         """(text, style, typed_chars) for everything on screen, oldest first."""
@@ -747,8 +803,8 @@ class LyricsTerminal(Gtk.DrawingArea):
         pad = 12
         width = w - 2 * pad
         body_top = pad
-        items, cursor_on_last = self._items(self.position())
-        font = Pango.FontDescription.from_string("Monospace 10.5")
+        items, cursor_on_last = self._items(self.position() + self.offset_ms)
+        font = Pango.FontDescription.from_string(f"Monospace {self.font_size:.1f}")
         layouts = []
         for text, style, typed in items:
             layout = PangoCairo.create_layout(cr)
@@ -794,6 +850,19 @@ class LyricsTerminal(Gtk.DrawingArea):
             PangoCairo.show_layout(cr, layout)
             y += height
 
+        text, until = self._flash
+        if text and time.monotonic() < until:
+            note = PangoCairo.create_layout(cr)
+            note.set_font_description(Pango.FontDescription.from_string("Monospace 9"))
+            note.set_text(f"[{text}]", -1)
+            nw, nh = note.get_pixel_size()
+            cr.set_source_rgba(*TERM_BG, 0.9)
+            cr.rectangle(w - nw - 16, h - nh - 14, nw + 8, nh + 6)
+            cr.fill()
+            cr.set_source_rgb(*TERM_GREEN)
+            cr.move_to(w - nw - 12, h - nh - 11)
+            PangoCairo.show_layout(cr, note)
+
         # scanlines
         cr.set_source_rgba(0, 0, 0, 0.22)
         yy = 0
@@ -838,6 +907,10 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self._volume_id = 0
         self._skip_pending = 0
         self.bg = DEFAULT_BG
+        self.context_uri = None
+        self.fullscreen_on = False
+        self._layout_id = 0
+        self._lyrics_offsets = {}
 
         self.set_decorated(False)
         self.set_keep_above(True)
@@ -855,13 +928,15 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         w = self.settings.get_int("width", 0)
         h = self.settings.get_int("height", 0)
         self.set_default_size(w if w > 300 else (860 if self.lyrics_button_on() else 480),
-                              h if h > 300 else 500)
+                              h if h > 300 else 620)
         if self.settings.get("x") is not None:
             self.move(self.settings.get_int("x"), self.settings.get_int("y"))
 
         self.connect("delete-event", self._on_delete)
         self.connect("configure-event", self._on_configure)
         self.connect("key-press-event", self._on_key)
+        self.connect("window-state-event", self._on_window_state)
+        self.connect("size-allocate", lambda *_: self._schedule_layout())
 
         self.mpris = Mpris(self._on_mpris)
         GLib.timeout_add(250, self._tick)
@@ -912,19 +987,23 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         settings_button.connect("clicked", lambda *_: self.open_setup())
         header.pack_start(settings_button, False, False, 0)
 
+        self.fullscreen_button = icon_button(["view-fullscreen-symbolic"], "⛶", "Fullscreen (F11)")
+        self.fullscreen_button.connect("clicked", lambda *_: self.toggle_fullscreen())
+        header.pack_start(self.fullscreen_button, False, False, 0)
+
         close_button = icon_button(["window-close-symbolic"], "✕", "Close")
         close_button.connect("clicked", lambda *_: self.app.quit())
         header.pack_start(close_button, False, False, 0)
 
         # body: left column (player + queue), right column (lyrics terminal)
-        body = Gtk.Box(spacing=18)
+        body = self.body = Gtk.Box(spacing=18)
         body.set_margin_start(16)
         body.set_margin_end(16)
         body.set_margin_top(10)
         self.frame.pack_start(body, True, True, 0)
 
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        body.pack_start(left, False, False, 0)
+        left = self.left = FlexColumn()
+        body.pack_start(left, False, True, 0)
 
         top = Gtk.Box(spacing=16)
         left.pack_start(top, False, False, 0)
@@ -932,7 +1011,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         top.pack_start(self.cover, False, False, 0)
 
         info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        info.set_size_request(200, -1)
+        info.set_size_request(110, -1)
         top.pack_start(info, True, True, 0)
         info.pack_start(Gtk.Box(), True, True, 0)
         self.title_label = Gtk.Label(label="Nothing playing", xalign=0)
@@ -1009,7 +1088,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.volume_scale.set_draw_value(False)
         self.volume_scale.set_can_focus(False)
-        self.volume_scale.set_size_request(160, -1)
+        self.volume_scale.set_size_request(90, -1)
         self.volume_scale.connect("change-value", self._on_volume_change)
         self.volume_scale.connect("button-press-event", lambda *_: setattr(self, "volume_dragging", True))
         self.volume_scale.connect("button-release-event", lambda *_: setattr(self, "volume_dragging", False))
@@ -1020,6 +1099,9 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         up_next = Gtk.Label(label="UP NEXT", xalign=0)
         up_next.get_style_context().add_class("np-section")
         queue_header.pack_start(up_next, True, True, 0)
+        refresh = icon_button(["view-refresh-symbolic"], "↻", "Reload the queue", 12)
+        refresh.connect("clicked", lambda *_: self._fetch_queue())
+        queue_header.pack_start(refresh, False, False, 0)
         left.pack_start(queue_header, False, False, 2)
 
         self.queue_stack = Gtk.Stack()
@@ -1029,7 +1111,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         overlay = Gtk.Overlay()
         self.queue_scroller = Gtk.ScrolledWindow()
         self.queue_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.queue_scroller.set_size_request(-1, 170)
+        self.queue_scroller.set_size_request(-1, 96)
         self.queue_list = Gtk.ListBox()
         self.queue_list.set_selection_mode(Gtk.SelectionMode.NONE)
         self.queue_list.set_activate_on_single_click(True)
@@ -1118,7 +1200,9 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.lyrics.set_visible(on)
         self._set_pill(self.lyrics_button, on)
         self.settings.set("lyrics", on)
-        self.resize(max(width, 820) if on else 480, height)
+        if not self.fullscreen_on:
+            self.resize(max(width, 820) if on else max(360, min(width, 480)), height)
+        self._schedule_layout()
 
     # ---------------------------------------------------------------- position
     def position_ms(self):
@@ -1197,7 +1281,9 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.duration_label.set_text(fmt_time(track["duration_ms"]))
         self.load_cover(track["art_url"], track["key"])
         self.load_lyrics(track)
-        GLib.timeout_add(700, lambda: self._fetch_queue() or False)
+        GLib.timeout_add(1200, lambda: self._fetch_queue() or False)
+        GLib.timeout_add(5000, lambda: self._fetch_queue() or False)
+        self.lyrics.offset_ms = self._lyrics_offsets.get(track["key"], 0)
         GLib.timeout_add(400, lambda: self._api_poll() and False)
 
     def load_cover(self, url, key):
@@ -1242,6 +1328,10 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
                     {"track_name": track["title"], "artist_name": track["first_artist"]}))
                 results = json.loads(body) if status == 200 else []
                 results = [r for r in results if isinstance(r, dict)]
+                if track["duration_ms"]:
+                    # Prefer versions of the same length (the same recording, so the timing fits).
+                    target = track["duration_ms"] / 1000
+                    results.sort(key=lambda r: abs((r.get("duration") or 0) - target) > 3)
                 record = (next((r for r in results if r.get("syncedLyrics")), None)
                           or next((r for r in results if r.get("plainLyrics")), None))
             if not record:
@@ -1298,9 +1388,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
                 self._updating = True
                 self.volume_scale.set_value(self.volume)
                 self._updating = False
+            self.context_uri = (state.get("context") or {}).get("uri")
             self._update_mode_buttons()
-            if self._api_ticks % 3 == 0:
-                self._fetch_queue()
 
         run_async(lambda: self.web.call("GET", "/me/player"), done)
         return True
@@ -1328,7 +1417,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
                     images = (entry.get("album") or {}).get("images") or []
                 small = min(images, key=lambda im: im.get("width") or 9999)["url"] if images else None
                 items.append({"title": entry.get("name", ""), "artist": artist,
-                              "duration_ms": entry.get("duration_ms") or 0, "image": small})
+                              "duration_ms": entry.get("duration_ms") or 0, "image": small,
+                              "uri": entry.get("uri")})
             self._set_queue(items)
             self._update_connect_ui()
         run_async(lambda: self.web.call("GET", "/me/player/queue"), done)
@@ -1360,7 +1450,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             duration.get_style_context().add_class("np-dim")
             box.pack_start(duration, False, False, 0)
             row.add(box)
-            row.set_tooltip_text("Skip to this song")
+            row.set_tooltip_text("Play this song")
             self.queue_list.add(row)
             if item["image"]:
                 self._load_thumb(item["image"], thumb)
@@ -1378,8 +1468,30 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         run_async(lambda: cached_download(url), done)
 
     def _on_queue_row(self, _list, row):
-        # Spotify has no "play this queued song" command: skip forward until we get there.
-        steps = row.index + 1
+        item = self.queue[row.index] if row.index < len(self.queue) else {}
+        uri = item.get("uri")
+        if not uri or not self.web.connected:
+            self._skip_forward(row.index + 1)
+            return
+        context = self.context_uri
+        row.set_opacity(0.5)
+
+        def work():
+            # Play it inside the current playlist/album so the rest keeps going from there;
+            # if the song isn't part of it (e.g. added to the queue by hand), play it on its own.
+            if context and context.startswith(("spotify:playlist:", "spotify:album:")):
+                if self.web.call("PUT", "/me/player/play",
+                                 body={"context_uri": context, "offset": {"uri": uri}}) is not None:
+                    return True
+            return self.web.call("PUT", "/me/player/play", body={"uris": [uri]}) is not None
+
+        def done(ok):
+            if ok is not True:
+                self._skip_forward(row.index + 1)
+        run_async(work, done)
+
+    def _skip_forward(self, steps):
+        # Fallback: skip forward until we get there.
         self._skip_pending = steps
 
         def step():
@@ -1603,14 +1715,60 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         dialog.connect("response", on_response)
         dialog.show_all()
 
+    # ---------------------------------------------------------------- adaptive layout
+    def _schedule_layout(self):
+        if not self._layout_id:
+            self._layout_id = GLib.idle_add(self._relayout)
+
+    def _relayout(self):
+        self._layout_id = 0
+        w, h = self.get_size()
+        lyrics_on = self.lyrics.get_visible()
+        inner = max(200, w - 32)
+        if lyrics_on:
+            left_w = int(min(max(inner * 0.5, 280), 640))
+        else:
+            left_w = inner
+        self.left.set_natural(left_w)
+        self.body.set_child_packing(self.left, not lyrics_on, True, 0, Gtk.PackType.START)
+        # The cover gets the room the rest of the left column leaves over.
+        # (the queue keeps room for about three songs)
+        cover = int(min(left_w * 0.48, (h - 400) if h > 490 else h * 0.18, 460))
+        self.cover.set_natural(max(CoverView.MIN, cover))
+        big = self.fullscreen_on or (w > 1150 and h > 750)
+        ctx = self.frame.get_style_context()
+        (ctx.add_class if big else ctx.remove_class)("np-big")
+        self.lyrics.font_size = round(10.5 * min(2.1, max(0.85, h / 560)), 1)
+        return False
+
+    def toggle_fullscreen(self):
+        if self.fullscreen_on:
+            self.unfullscreen()
+        else:
+            self.fullscreen()
+
+    def _on_window_state(self, _widget, event):
+        self.fullscreen_on = bool(event.new_window_state & Gdk.WindowState.FULLSCREEN)
+        set_button_icon(self.fullscreen_button,
+                        ["view-restore-symbolic"] if self.fullscreen_on else ["view-fullscreen-symbolic"],
+                        "⛶", 16)
+        self.fullscreen_button.set_tooltip_text("Leave fullscreen (F11)" if self.fullscreen_on
+                                                else "Fullscreen (F11)")
+        self._schedule_layout()
+        return False
+
     # ---------------------------------------------------------------- window behaviour
     def _on_header_press(self, _widget, event):
-        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS:
+        if event.button != 1:
+            return False
+        if event.type == DOUBLE_CLICK:
+            self.toggle_fullscreen()
+        elif event.type == Gdk.EventType.BUTTON_PRESS and not self.fullscreen_on:
             self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
         return False
 
     def _on_grip_press(self, _widget, event):
-        if event.button == 1:
+        if event.button == 1 and not self.fullscreen_on:
             self.begin_resize_drag(Gdk.WindowEdge.SOUTH_EAST, event.button,
                                    int(event.x_root), int(event.y_root), event.time)
         return True
@@ -1638,8 +1796,17 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             self.mpris.next()
         elif key == Gdk.KEY_Left:
             self.mpris.previous()
+        elif key == Gdk.KEY_F11:
+            self.toggle_fullscreen()
         elif key == Gdk.KEY_Escape:
-            self.hide()
+            if self.fullscreen_on:
+                self.unfullscreen()
+            else:
+                self.hide()
+        elif key in (Gdk.KEY_bracketleft, Gdk.KEY_bracketright):
+            self.lyrics.shift(-250 if key == Gdk.KEY_bracketleft else 250)
+            if self.track_key:
+                self._lyrics_offsets[self.track_key] = self.lyrics.offset_ms
         else:
             return False
         return True

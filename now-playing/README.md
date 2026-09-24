@@ -38,13 +38,15 @@ Disconnect any time from the gear button.
 | **ASCII** | show the cover as green terminal ASCII art |
 | **LYRICS** | show / hide the lyrics terminal |
 | gear | connect / disconnect your Spotify account |
+| fullscreen button / F11 / double-click the top bar | fullscreen (Esc or F11 to leave) |
 | progress bar | click or drag to jump in the song |
 | shuffle, previous, play/pause, next, repeat | as in Spotify (repeat: off > all > this song) |
 | volume slider | Spotify's volume |
-| **Up next** | the next songs in your queue; scroll for more. Click one to skip to it |
+| **Up next** | the next songs in your queue; scroll for more. Click one to play it. The reload button refreshes the list |
+| `[` / `]` | lyrics a quarter second earlier / later (when the lyrics are off for a song) |
 | Space / Left / Right | play-pause / previous / next (when the widget is focused) |
 | Esc | hide the widget |
-| top bar | drag to move; bottom-right corner resizes |
+| top bar | drag to move; bottom-right corner resizes (everything scales with the window) |
 
 The background color follows the album cover.
 
@@ -57,8 +59,10 @@ there at all; the terminal says so.
 
 ## Notes
 
-- Clicking a song in the queue skips forward to it (Spotify has no "play this queued song"
-  command, so the widget presses Next the right number of times).
+- The queue is loaded when the song changes (and when you press reload), not constantly:
+  Spotify's queue list is unreliable when asked repeatedly, especially with shuffle on.
+  With shuffle on, Spotify may still play a different song next than its list says.
+- Clicking a song in the queue plays it directly inside your current playlist or album.
 - Uninstall with `./uninstall.sh` (add `--forget` to also delete your Spotify login).
 
 ## Requirements
