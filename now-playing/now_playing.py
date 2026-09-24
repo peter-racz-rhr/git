@@ -83,11 +83,11 @@ window.np { background-color: transparent; }
 }
 .np-frame button:hover { background-color: rgba(255,255,255,0.12); }
 .np-frame button:disabled { opacity: 0.35; }
-.np-frame button.np-play { background-color: #f2f2f2; color: #121212; padding: 11px; }
+.np-frame button.np-play { background-color: #f2f2f2; color: #121212; padding: 7px; }
 .np-frame button.np-play:hover { background-color: #ffffff; }
 .np-frame button.np-on { color: #1ed760; }
 .np-frame button.np-pill {
-    border-radius: 999px; padding: 2px 10px; font-size: 8pt; font-weight: bold;
+    border-radius: 999px; padding: 1px 8px; font-size: 8pt; font-weight: normal;
     color: rgba(255,255,255,0.7);
 }
 .np-frame button.np-pill.np-on { background-color: rgba(30,215,96,0.16); }
@@ -101,13 +101,13 @@ window.np { background-color: transparent; }
 }
 .np-frame scale { padding: 6px 0; }
 .np-frame scale trough {
-    min-height: 4px; background-color: rgba(255,255,255,0.22);
+    min-height: 3px; background-color: rgba(255,255,255,0.22);
     border: none; border-radius: 2px; background-image: none;
 }
 .np-frame scale highlight { background-color: #f2f2f2; border: none; border-radius: 2px; background-image: none; }
 .np-frame scale:hover highlight { background-color: #1ed760; }
 .np-frame scale slider {
-    min-width: 12px; min-height: 12px; margin: -5px; border-radius: 6px;
+    min-width: 10px; min-height: 10px; margin: -4px; border-radius: 5px;
     background-color: #ffffff; background-image: none; border: none; box-shadow: none;
 }
 .np-frame list, .np-frame row { background-color: transparent; }
@@ -663,6 +663,7 @@ class CoverView(Gtk.DrawingArea):
 class LyricsTerminal(Gtk.DrawingArea):
     TYPE_SPEED = 32.0      # characters per second
     PROMPT = "> "
+    USER_HOST = f"{GLib.get_user_name()}@{GLib.get_host_name()}"
 
     def __init__(self, position_source):
         super().__init__()
@@ -694,7 +695,7 @@ class LyricsTerminal(Gtk.DrawingArea):
         """(text, style, typed_chars) for everything on screen, oldest first."""
         items = []
         since = time.monotonic() - self.changed_at
-        command = f'$ lyrics --now-playing "{self.title}"'
+        command = f'{self.USER_HOST}:~$ lyrics "{self.title}"'
         typed = min(len(command), int(since * 45))
         items.append((command, "cmd", typed))
         if typed < len(command):
@@ -743,26 +744,9 @@ class LyricsTerminal(Gtk.DrawingArea):
         cr.set_source_rgb(*TERM_BG)
         cr.paint()
 
-        # title bar
-        cr.set_source_rgba(1, 1, 1, 0.06)
-        cr.rectangle(0, 0, w, 22)
-        cr.fill()
-        for i, color in enumerate(((1, .37, .34), (1, .74, .18), (.16, .79, .25))):
-            cr.set_source_rgb(*color)
-            cr.arc(12 + i * 16, 11, 4.5, 0, 6.2832)
-            cr.fill()
-        bar = PangoCairo.create_layout(cr)
-        font = Pango.FontDescription.from_string("Monospace 8")
-        bar.set_font_description(font)
-        bar.set_text("lyrics@spotify: ~", -1)
-        tw, th = bar.get_pixel_size()
-        cr.set_source_rgba(1, 1, 1, 0.45)
-        cr.move_to((w - tw) / 2, (22 - th) / 2)
-        PangoCairo.show_layout(cr, bar)
-
         pad = 12
         width = w - 2 * pad
-        body_top = 22 + 8
+        body_top = pad
         items, cursor_on_last = self._items(self.position())
         font = Pango.FontDescription.from_string("Monospace 10.5")
         layouts = []
@@ -776,7 +760,19 @@ class LyricsTerminal(Gtk.DrawingArea):
             blink = int(time.monotonic() * 1.9) % 2 == 0
             is_last = len(layouts) == len(items) - 1
             cursor = "█" if (is_last and cursor_on_last and blink) else (" " if is_last else "")
-            layout.set_text(prefix + shown + cursor, -1)
+            if style == "cmd":
+                # Like a real Linux prompt: user@host in green, the path in blue.
+                n = len(self.USER_HOST)
+                esc = GLib.markup_escape_text
+                markup = f"<b><span foreground='#39ff6a'>{esc(shown[:n])}</span></b>"
+                rest = shown[n:]
+                if rest:
+                    markup += esc(rest[:1])
+                    markup += f"<b><span foreground='#6ea8ff'>{esc(rest[1:2])}</span></b>"
+                    markup += esc(rest[2:])
+                layout.set_markup(markup + esc(cursor), -1)
+            else:
+                layout.set_text(prefix + shown + cursor, -1)
             layouts.append((layout, style))
 
         heights = [layout.get_pixel_size()[1] + 3 for layout, _ in layouts]
@@ -791,16 +787,16 @@ class LyricsTerminal(Gtk.DrawingArea):
             if style == "line":
                 cr.set_source_rgb(*TERM_GREEN)
             elif style == "cmd":
-                cr.set_source_rgba(0.75, 0.9, 0.8, 0.85)
+                cr.set_source_rgb(0.85, 0.88, 0.86)
             else:
                 cr.set_source_rgb(*TERM_DIM)
             cr.move_to(pad, y)
             PangoCairo.show_layout(cr, layout)
             y += height
 
-        # scanlines + soft glow edge
+        # scanlines
         cr.set_source_rgba(0, 0, 0, 0.22)
-        yy = 22
+        yy = 0
         while yy < h:
             cr.rectangle(0, yy, w, 1)
             yy += 3
@@ -988,20 +984,20 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         controls = Gtk.Box(spacing=10)
         controls.set_halign(Gtk.Align.CENTER)
         left.pack_start(controls, False, False, 0)
-        self.shuffle_button = icon_button(["media-playlist-shuffle-symbolic"], "shuffle", "Shuffle", 18)
+        self.shuffle_button = icon_button(["media-playlist-shuffle-symbolic"], "shuffle", "Shuffle", 16)
         self.shuffle_button.connect("clicked", lambda *_: self.toggle_shuffle())
         controls.pack_start(self.shuffle_button, False, False, 0)
-        prev_button = icon_button(["media-skip-backward-symbolic"], "⏮", "Previous", 22)
+        prev_button = icon_button(["media-skip-backward-symbolic"], "⏮", "Previous", 18)
         prev_button.connect("clicked", lambda *_: self.mpris.previous())
         controls.pack_start(prev_button, False, False, 0)
         self.play_button = icon_button(["media-playback-start-symbolic"], "▶", "Play / pause",
-                                       22, "np-play")
+                                       18, "np-play")
         self.play_button.connect("clicked", lambda *_: self.play_pause())
         controls.pack_start(self.play_button, False, False, 0)
-        next_button = icon_button(["media-skip-forward-symbolic"], "⏭", "Next", 22)
+        next_button = icon_button(["media-skip-forward-symbolic"], "⏭", "Next", 18)
         next_button.connect("clicked", lambda *_: self.mpris.next())
         controls.pack_start(next_button, False, False, 0)
-        self.repeat_button = icon_button(["media-playlist-repeat-symbolic"], "repeat", "Repeat", 18)
+        self.repeat_button = icon_button(["media-playlist-repeat-symbolic"], "repeat", "Repeat", 16)
         self.repeat_button.connect("clicked", lambda *_: self.cycle_repeat())
         controls.pack_start(self.repeat_button, False, False, 0)
 
@@ -1419,9 +1415,9 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
 
     def _update_play_icon(self):
         if self.playing:
-            set_button_icon(self.play_button, ["media-playback-pause-symbolic"], "❚❚", 22)
+            set_button_icon(self.play_button, ["media-playback-pause-symbolic"], "❚❚", 18)
         else:
-            set_button_icon(self.play_button, ["media-playback-start-symbolic"], "▶", 22)
+            set_button_icon(self.play_button, ["media-playback-start-symbolic"], "▶", 18)
 
     def toggle_shuffle(self):
         self.shuffle = not self.shuffle
@@ -1449,10 +1445,10 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self._set_pill(self.repeat_button, self.repeat != "off")
         if self.repeat == "track":
             set_button_icon(self.repeat_button, ["media-playlist-repeat-song-symbolic",
-                                                 "media-playlist-repeat-symbolic"], "repeat 1", 18)
+                                                 "media-playlist-repeat-symbolic"], "repeat 1", 16)
             self.repeat_button.set_tooltip_text("Repeat: this song")
         else:
-            set_button_icon(self.repeat_button, ["media-playlist-repeat-symbolic"], "repeat", 18)
+            set_button_icon(self.repeat_button, ["media-playlist-repeat-symbolic"], "repeat", 16)
             self.repeat_button.set_tooltip_text("Repeat: " + ("on" if self.repeat == "context" else "off"))
 
     def _on_seek_press(self, *_):
