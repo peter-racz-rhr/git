@@ -137,6 +137,7 @@ window.np { background-color: transparent; }
 .np-retro row:hover { background-color: rgba(57,255,106,0.12); }
 .np-frame label.np-focus-title { font-size: 12pt; font-weight: bold; }
 .np-big label.np-focus-title { font-size: 16pt; }
+.np-frame.np-fullscreen { border-radius: 0; border: none; }
 .np-big .np-title { font-size: 30pt; }
 .np-big .np-artist { font-size: 18pt; }
 .np-big label.np-album { font-size: 14pt; }
@@ -1491,7 +1492,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         if not getattr(self, "retro", False):
             return False
         w, h = widget.get_allocated_width(), widget.get_allocated_height()
-        CoverView._rounded(cr, 0, 0, w, h, 12)
+        CoverView._rounded(cr, 0, 0, w, h, 0.01 if self.fullscreen_on else 12)
         cr.clip()
         cr.set_source_rgba(0, 0, 0, 0.22)
         y = 0
@@ -2133,6 +2134,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
 
     def _on_window_state(self, _widget, event):
         self.fullscreen_on = bool(event.new_window_state & Gdk.WindowState.FULLSCREEN)
+        ctx = self.frame.get_style_context()
+        (ctx.add_class if self.fullscreen_on else ctx.remove_class)("np-fullscreen")   # square corners
         set_button_icon(self.fullscreen_button,
                         ["view-restore-symbolic"] if self.fullscreen_on else ["view-fullscreen-symbolic"],
                         "⛶", 16)
