@@ -1165,14 +1165,10 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.frame.get_style_context().add_class("np-frame")
         self.frame.get_style_context().add_provider(self.bg_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        root = Gtk.Overlay()
-        root.add(self.frame)
-        self.scanlines = Gtk.DrawingArea()
-        self.scanlines.connect("draw", self._draw_scanlines)
-        self.scanlines.set_no_show_all(True)
-        root.add_overlay(self.scanlines)
-        root.set_overlay_pass_through(self.scanlines, True)
-        self.add(root)
+        self.add(self.frame)
+        # Scanlines are painted right after the frame's contents (not as a layer on top,
+        # which would swallow mouse clicks).
+        self.frame.connect_after("draw", self._draw_scanlines)
 
         # header
         header_events = Gtk.EventBox()
@@ -1483,7 +1479,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self._set_pill(self.ascii_button, on)
         ctx = self.frame.get_style_context()
         (ctx.add_class if on else ctx.remove_class)("np-retro")
-        self.scanlines.set_visible(on)
+        self.frame.queue_draw()
         self._paint_bg()
         for row in self.queue_list.get_children():
             for image in _find_images(row):
@@ -1492,6 +1488,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
                     image.set_from_pixbuf(green_tint(original) if on else original)
 
     def _draw_scanlines(self, widget, cr):
+        if not getattr(self, "retro", False):
+            return False
         w, h = widget.get_allocated_width(), widget.get_allocated_height()
         CoverView._rounded(cr, 0, 0, w, h, 12)
         cr.clip()
