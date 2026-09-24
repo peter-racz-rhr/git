@@ -117,6 +117,24 @@ window.np { background-color: transparent; }
 .np-frame row:selected { background-color: transparent; }
 .np-frame .np-grip { color: rgba(255,255,255,0.3); padding: 0 4px; }
 .np-frame entry { background-color: rgba(255,255,255,0.1); color: #ffffff; border: none; }
+.np-frame.np-retro { border-color: rgba(57,255,106,0.35); }
+.np-retro label, .np-retro button label { color: #39ff6a; font-family: Monospace; }
+.np-retro label.np-album, .np-retro label.np-dim, .np-retro label.np-section,
+.np-retro label.np-brand { color: rgba(57,255,106,0.55); }
+.np-retro .np-title { font-family: Monospace; font-weight: bold; }
+.np-retro image { color: #39ff6a; }
+.np-retro button:hover { background-color: rgba(57,255,106,0.14); }
+.np-retro button.np-play { background-color: #39ff6a; border-radius: 3px; }
+.np-retro button.np-play image, .np-retro button.np-play label { color: #041006; }
+.np-retro button.np-pill { border-radius: 3px; }
+.np-retro button.np-pill.np-on { background-color: #39ff6a; }
+.np-retro button.np-pill.np-on label { color: #041006; }
+.np-retro button.np-on image { color: #b6ffc8; }
+.np-retro button.np-connect { background-color: #39ff6a; border-radius: 3px; }
+.np-retro scale trough { background-color: rgba(57,255,106,0.22); border-radius: 0; }
+.np-retro scale highlight, .np-retro scale:hover highlight { background-color: #39ff6a; border-radius: 0; }
+.np-retro scale slider { background-color: #39ff6a; border-radius: 0; }
+.np-retro row:hover { background-color: rgba(57,255,106,0.12); }
 .np-big .np-title { font-size: 30pt; }
 .np-big .np-artist { font-size: 18pt; }
 .np-big label.np-album { font-size: 14pt; }
@@ -250,6 +268,14 @@ def parse_lrc(text):
             lines.append((int((int(minutes) * 60 + float(seconds)) * 1000), words))
     lines.sort(key=lambda item: item[0])
     return lines
+
+
+def _find_images(widget):
+    if isinstance(widget, Gtk.Image):
+        return [widget]
+    if isinstance(widget, Gtk.Container):
+        return [img for child in widget.get_children() for img in _find_images(child)]
+    return []
 
 
 DOUBLE_CLICK = getattr(Gdk.EventType, "DOUBLE_BUTTON_PRESS", None) or getattr(Gdk.EventType, "_2BUTTON_PRESS")
@@ -669,44 +695,107 @@ class CoverView(Gtk.DrawingArea):
         return False
 
     def _draw_ascii(self, cr, x0, y0, size):
-        cr.set_source_rgb(*TERM_BG)
+        key = (id(self.pixbuf), int(size))
+        if self._ascii_cache is None or self._ascii_cache[0] != key:
+            self._ascii_cache = (key, render_ascii_surface(self.pixbuf, int(size)))
+        cr.set_source_surface(self._ascii_cache[1], x0, y0)
         cr.paint()
-        font = Pango.FontDescription.from_string("Monospace Bold")
-        font.set_absolute_size(7.2 * Pango.SCALE)
-        layout = PangoCairo.create_layout(cr)
-        layout.set_font_description(font)
-        layout.set_text("M", -1)
-        cw, ch = layout.get_pixel_size()
-        cw, ch = max(cw, 1), max(ch - 1, 1)
-        cols, rows = int((size - 8) // cw), int((size - 8) // ch)
-        if self.pixbuf is None:
-            lines = [""] * (rows // 2 - 1) + ["no cover".center(cols)]
-        else:
-            key = (id(self.pixbuf), cols, rows)
-            if self._ascii_cache is None or self._ascii_cache[0] != key:
-                self._ascii_cache = (key, pixbuf_to_ascii(self.pixbuf, cols, rows))
-            lines = self._ascii_cache[1]
-        ox = x0 + (size - cols * cw) / 2
-        oy = y0 + (size - rows * ch) / 2
+
+
+def _green(level):
+    """Phosphor green at a brightness between 0 and 1 (on the terminal background)."""
+    r = TERM_BG[0] + (TERM_GREEN[0] - TERM_BG[0]) * level
+    g = TERM_BG[1] + (TERM_GREEN[1] - TERM_BG[1]) * level
+    b = TERM_BG[2] + (TERM_GREEN[2] - TERM_BG[2]) * level
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+
+ASCII_LEVELS = 10
+ASCII_COLORS = [_green(0.30 + 0.70 * (i / (ASCII_LEVELS - 1)) ** 0.7) for i in range(ASCII_LEVELS)]
+
+
+def green_tint(pixbuf):
+    """A green phosphor version of a small picture (for queue thumbnails in retro mode)."""
+    pb = pixbuf.add_alpha(False, 0, 0, 0) if not pixbuf.get_has_alpha() else pixbuf.copy()
+    w, h, stride = pb.get_width(), pb.get_height(), pb.get_rowstride()
+    data = bytearray(pb.get_pixels())
+    for y in range(h):
+        for x in range(w):
+            i = y * stride + x * 4
+            lum = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255
+            level = 0.15 + 0.85 * lum
+            data[i] = int(255 * (TERM_BG[0] + (TERM_GREEN[0] - TERM_BG[0]) * level))
+            data[i + 1] = int(255 * (TERM_BG[1] + (TERM_GREEN[1] - TERM_BG[1]) * level))
+            data[i + 2] = int(255 * (TERM_BG[2] + (TERM_GREEN[2] - TERM_BG[2]) * level))
+    return GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(bytes(data)), GdkPixbuf.Colorspace.RGB,
+                                           True, 8, w, h, stride)
+
+
+def render_ascii_surface(pixbuf, size):
+    """Draw the cover as high-density ASCII art, each character glowing as bright as its spot."""
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    cr = cairo.Context(surface)
+    cr.set_source_rgb(*TERM_BG)
+    cr.paint()
+    layout = PangoCairo.create_layout(cr)
+    probe = Pango.FontDescription.from_string("Monospace Bold")
+    probe.set_absolute_size(10 * Pango.SCALE)
+    layout.set_font_description(probe)
+    layout.set_text("M" * 10, -1)
+    cw10 = layout.get_pixel_size()[0] / 10
+    cols = int(min(170, max(48, size / 3.4)))
+    font_px = 10 * (size - 6) / cols / cw10
+    font = Pango.FontDescription.from_string("Monospace Bold")
+    font.set_absolute_size(font_px * Pango.SCALE)
+    layout.set_font_description(font)
+    layout.set_text("M", -1)
+    line_h = max(1.0, layout.get_extents()[1].height / Pango.SCALE)
+    cw = layout.get_extents()[1].width / Pango.SCALE
+    rows = max(1, int((size - 6) // line_h))
+    if pixbuf is None:
+        layout.set_text("no cover", -1)
         cr.set_source_rgb(*TERM_GREEN)
-        for i, line in enumerate(lines):
-            layout.set_text(line, -1)
-            cr.move_to(ox, oy + i * ch)
-            PangoCairo.show_layout(cr, layout)
-        # CRT scanlines
-        cr.set_source_rgba(0, 0, 0, 0.28)
-        y = y0
-        while y < y0 + size:
-            cr.rectangle(x0, y, size, 1)
-            y += 3
-        cr.fill()
+        tw, th = layout.get_pixel_size()
+        cr.move_to((size - tw) / 2, (size - th) / 2)
+        PangoCairo.show_layout(cr, layout)
+        return surface
+
+    small = pixbuf.scale_simple(cols, rows, GdkPixbuf.InterpType.HYPER)
+    data = small.get_pixels()
+    stride, channels = small.get_rowstride(), small.get_n_channels()
+    lum = [[0.2126 * data[y * stride + x * channels] + 0.7152 * data[y * stride + x * channels + 1]
+            + 0.0722 * data[y * stride + x * channels + 2] for x in range(cols)] for y in range(rows)]
+    flat = sorted(v for row in lum for v in row)
+    lo, hi = flat[int(len(flat) * 0.01)], flat[int(len(flat) * 0.99) - 1]
+    span = max(1.0, hi - lo)
+    ramp = ASCII_RAMP
+    esc = GLib.markup_escape_text
+    ox = (size - cols * cw) / 2
+    oy = (size - rows * line_h) / 2
+    for y, row in enumerate(lum):
+        parts, run, run_level = [], "", None
+        for v in row:
+            t = min(1.0, max(0.0, (v - lo) / span)) ** 0.8
+            char = ramp[int(t * (len(ramp) - 1))]
+            level = int(t * (ASCII_LEVELS - 1))
+            if level != run_level and run:
+                parts.append(f"<span foreground='{ASCII_COLORS[run_level]}'>{esc(run)}</span>")
+                run = ""
+            run += char
+            run_level = level
+        if run:
+            parts.append(f"<span foreground='{ASCII_COLORS[run_level]}'>{esc(run)}</span>")
+        layout.set_markup("".join(parts), -1)
+        cr.move_to(ox, oy + y * line_h)
+        PangoCairo.show_layout(cr, layout)
+    return surface
 
 
 # --------------------------------------------------------------------------
-# lyrics that type themselves in a terminal
+# lyrics: a terminal that types them (retro mode) or big bold lines (normal mode)
 # --------------------------------------------------------------------------
 
-class LyricsTerminal(Gtk.DrawingArea):
+class LyricsView(Gtk.DrawingArea):
     TYPE_SPEED = 32.0      # characters per second
     PROMPT = "> "
     USER_HOST = f"{GLib.get_user_name()}@{GLib.get_host_name()}"
@@ -716,6 +805,10 @@ class LyricsTerminal(Gtk.DrawingArea):
         self.position = position_source
         self.set_size_request(170, -1)
         self.font_size = 10.5
+        self.retro = False
+        self._scroll = None
+        self._last_frame = time.monotonic()
+        self._bold_cache = None
         self.offset_ms = 0
         self._flash = ("", 0.0)
         self.state = "idle"            # idle | loading | synced | plain | none | instrumental | offline
@@ -739,6 +832,7 @@ class LyricsTerminal(Gtk.DrawingArea):
     def set_lyrics(self, state, lines):
         self.state = state
         self.lines = lines
+        self._scroll = None
 
     def flash(self, text):
         self._flash = (text, time.monotonic() + 1.6)
@@ -794,12 +888,147 @@ class LyricsTerminal(Gtk.DrawingArea):
                 items.append((text, "line", min(len(text), chars)))
         return items, True
 
-    def _draw(self, _widget, cr):
+    def _draw(self, widget, cr):
+        if self.retro:
+            self._draw_terminal(cr)
+        else:
+            self._draw_bold(cr)
+        return False
+
+    def _current_index(self, pos_ms):
+        current = -1
+        for i, (t, _text) in enumerate(self.lines):
+            if t <= pos_ms:
+                current = i
+            else:
+                break
+        return current
+
+    def _draw_flash(self, cr, w, h, retro):
+        text, until = self._flash
+        if not text or time.monotonic() >= until:
+            return
+        note = PangoCairo.create_layout(cr)
+        note.set_font_description(Pango.FontDescription.from_string(
+            "Monospace 9" if retro else "Sans Bold 9"))
+        note.set_text(f"[{text}]" if retro else text, -1)
+        nw, nh = note.get_pixel_size()
+        if retro:
+            cr.set_source_rgba(*TERM_BG, 0.9)
+        else:
+            cr.set_source_rgba(0, 0, 0, 0.45)
+        cr.rectangle(w - nw - 16, h - nh - 14, nw + 8, nh + 6)
+        cr.fill()
+        cr.set_source_rgb(*(TERM_GREEN if retro else (1, 1, 1)))
+        cr.move_to(w - nw - 12, h - nh - 11)
+        PangoCairo.show_layout(cr, note)
+
+    # ---- normal mode: big bold lines, the current one fills up as it is sung
+    def _draw_bold(self, cr):
         w, h = self.get_allocated_width(), self.get_allocated_height()
-        CoverView._rounded(cr, 0, 0, w, h, 8)
+        now = time.monotonic()
+        dt = min(0.2, now - self._last_frame)
+        self._last_frame = now
+        pad = 14
+        width = max(40, w - 2 * pad)
+        size = round(self.font_size * 1.85, 1)
+        font = Pango.FontDescription.from_string(f"Sans Bold {size}")
+
+        def message(text):
+            layout = PangoCairo.create_layout(cr)
+            layout.set_font_description(font)
+            layout.set_width(int(width * Pango.SCALE))
+            layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+            layout.set_text(text, -1)
+            cr.set_source_rgba(1, 1, 1, 0.45)
+            cr.move_to(pad, h * 0.35)
+            PangoCairo.show_layout(cr, layout)
+
+        if self.state not in ("synced", "plain") or not self.lines:
+            since = now - self.changed_at
+            texts = {"loading": "Loading lyrics" + "." * (int(since * 3) % 4),
+                     "none": "No lyrics for this song",
+                     "instrumental": "\u266a Instrumental \u266a",
+                     "offline": "Spotify is not running",
+                     "idle": ""}
+            message(texts.get(self.state, ""))
+            self._draw_flash(cr, w, h, False)
+            return
+
+        # Lay out every line once per song/size, then only re-render the current one.
+        key = (id(self.lines), width, size)
+        if self._bold_cache is None or self._bold_cache[0] != key:
+            layouts, tops, y = [], [], 0
+            gap = size * 0.9
+            for _t, text in self.lines:
+                layout = PangoCairo.create_layout(cr)
+                layout.set_font_description(font)
+                layout.set_width(int(width * Pango.SCALE))
+                layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+                layout.set_text(text or "\u266a", -1)
+                layouts.append(layout)
+                tops.append(y)
+                y += layout.get_pixel_size()[1] + gap
+            self._bold_cache = (key, layouts, tops)
+        _key, layouts, tops = self._bold_cache
+
+        pos = self.position() + self.offset_ms
+        current = self._current_index(pos)
+        anchor = tops[max(current, 0)]
+        target = anchor - h * 0.32
+        if self._scroll is None or abs(target - self._scroll) > h * 3:
+            self._scroll = target
+        self._scroll += (target - self._scroll) * min(1.0, dt * 7)
+
+        cr.push_group()
+        for i, layout in enumerate(layouts):
+            y = tops[i] - self._scroll
+            lh = layout.get_pixel_size()[1]
+            if y + lh < 0 or y > h:
+                continue
+            cr.move_to(pad, y)
+            if i == current:
+                t, text = self.lines[i]
+                text = text or "\u266a"
+                nxt = self.lines[i + 1][0] if i + 1 < len(self.lines) else t + 4000
+                duration = max(800, min(8000, nxt - t)) * 0.85
+                done = int(len(text) * min(1.0, max(0.0, (pos - t) / duration)))
+                esc = GLib.markup_escape_text
+                layout.set_markup(f"<span foreground='#ffffff'>{esc(text[:done])}</span>"
+                                  f"<span foreground='#ffffff' alpha='55%'>{esc(text[done:])}</span>", -1)
+                cr.set_source_rgba(1, 1, 1, 1)
+                PangoCairo.show_layout(cr, layout)
+                layout.set_text(text, -1)
+            else:
+                distance = i - current
+                if distance < 0:
+                    alpha = max(0.10, 0.34 - 0.06 * (-distance - 1))
+                else:
+                    alpha = max(0.12, 0.55 - 0.09 * (distance - 1))
+                cr.set_source_rgba(1, 1, 1, alpha)
+                PangoCairo.show_layout(cr, layout)
+        group = cr.pop_group()
+        # soft fade at the top and bottom edge
+        mask = cairo.LinearGradient(0, 0, 0, h)
+        mask.add_color_stop_rgba(0, 0, 0, 0, 0)
+        mask.add_color_stop_rgba(0.12, 0, 0, 0, 1)
+        mask.add_color_stop_rgba(0.85, 0, 0, 0, 1)
+        mask.add_color_stop_rgba(1, 0, 0, 0, 0)
+        cr.set_source(group)
+        cr.mask(mask)
+        self._draw_flash(cr, w, h, False)
+
+    # ---- retro mode: a terminal that types the lyrics
+    def _draw_terminal(self, cr):
+        w, h = self.get_allocated_width(), self.get_allocated_height()
+        CoverView._rounded(cr, 0, 0, w, h, 4)
         cr.clip()
         cr.set_source_rgb(*TERM_BG)
         cr.paint()
+        cr.set_source_rgba(*TERM_GREEN, 0.35)
+        CoverView._rounded(cr, 0.5, 0.5, w - 1, h - 1, 4)
+        cr.set_line_width(1)
+        cr.stroke()
 
         pad = 12
         width = w - 2 * pad
@@ -851,27 +1080,7 @@ class LyricsTerminal(Gtk.DrawingArea):
             PangoCairo.show_layout(cr, layout)
             y += height
 
-        text, until = self._flash
-        if text and time.monotonic() < until:
-            note = PangoCairo.create_layout(cr)
-            note.set_font_description(Pango.FontDescription.from_string("Monospace 9"))
-            note.set_text(f"[{text}]", -1)
-            nw, nh = note.get_pixel_size()
-            cr.set_source_rgba(*TERM_BG, 0.9)
-            cr.rectangle(w - nw - 16, h - nh - 14, nw + 8, nh + 6)
-            cr.fill()
-            cr.set_source_rgb(*TERM_GREEN)
-            cr.move_to(w - nw - 12, h - nh - 11)
-            PangoCairo.show_layout(cr, note)
-
-        # scanlines
-        cr.set_source_rgba(0, 0, 0, 0.22)
-        yy = 0
-        while yy < h:
-            cr.rectangle(0, yy, w, 1)
-            yy += 3
-        cr.fill()
-        return False
+        self._draw_flash(cr, w, h, True)
 
 
 # --------------------------------------------------------------------------
@@ -953,7 +1162,14 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.frame.get_style_context().add_class("np-frame")
         self.frame.get_style_context().add_provider(self.bg_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        self.add(self.frame)
+        root = Gtk.Overlay()
+        root.add(self.frame)
+        self.scanlines = Gtk.DrawingArea()
+        self.scanlines.connect("draw", self._draw_scanlines)
+        self.scanlines.set_no_show_all(True)
+        root.add_overlay(self.scanlines)
+        root.set_overlay_pass_through(self.scanlines, True)
+        self.add(root)
 
         # header
         header_events = Gtk.EventBox()
@@ -971,7 +1187,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         header.pack_start(Gtk.Box(), True, True, 0)
 
         self.ascii_button = Gtk.Button(label="ASCII")
-        self.ascii_button.set_tooltip_text("Show the cover as old-school ASCII art")
+        self.ascii_button.set_tooltip_text("Retro terminal mode: ASCII cover, green on black, typing lyrics")
         self.ascii_button.get_style_context().add_class("np-pill")
         self.ascii_button.set_can_focus(False)
         self.ascii_button.connect("clicked", lambda *_: self._toggle_ascii())
@@ -1102,7 +1318,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         volume_row.pack_start(self.volume_scale, False, False, 0)
 
         # queue
-        queue_header = Gtk.Box()
+        queue_header = self.queue_header = Gtk.Box()
         up_next = Gtk.Label(label="UP NEXT", xalign=0)
         up_next.get_style_context().add_class("np-section")
         queue_header.pack_start(up_next, True, True, 0)
@@ -1155,7 +1371,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.queue_stack.add_named(connect_box, "message")
 
         # lyrics terminal
-        self.lyrics = LyricsTerminal(self.position_ms)
+        self.lyrics = LyricsView(self.position_ms)
         self.lyrics.set_margin_bottom(4)
         self.lyrics.set_no_show_all(True)
         body.pack_start(self.lyrics, True, True, 0)
@@ -1174,14 +1390,22 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         footer.pack_end(grip, False, False, 0)
         self.frame.pack_start(footer, False, False, 0)
 
-        self._set_pill(self.ascii_button, self.settings.get_bool("ascii", False))
-        self.cover.set_ascii(self.settings.get_bool("ascii", False))
+        for widget in (self.queue_header, self.queue_stack):
+            widget.show_all()
+            widget.set_no_show_all(True)
+        self.queue_shown = True
+        self.set_retro(self.settings.get_bool("ascii", False))
         self._set_pill(self.lyrics_button, self.lyrics_button_on())
         self._set_pill(self.pin_button, self.settings.get_bool("pinned", False))
         self.lyrics.set_visible(self.lyrics_button_on())
 
     # ---------------------------------------------------------------- look
     def _apply_bg(self, rgb):
+        self.album_bg = rgb
+        self._paint_bg()
+
+    def _paint_bg(self):
+        rgb = TERM_BG if getattr(self, "retro", False) else getattr(self, "album_bg", DEFAULT_BG)
         self.bg = rgb
         r, g, b = (int(c * 255) for c in rgb)
         self.bg_provider.load_from_data(f".np-frame {{ background-color: rgb({r},{g},{b}); }}".encode())
@@ -1203,10 +1427,43 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         (ctx.add_class if on else ctx.remove_class)("np-on")
 
     def _toggle_ascii(self):
-        on = not self.cover.ascii
+        self.set_retro(not self.retro)
+        self.settings.set("ascii", self.retro)
+
+    def set_retro(self, on):
+        """Retro terminal mode: ASCII cover, green-on-black everything, typing lyrics."""
+        self.retro = on
         self.cover.set_ascii(on)
+        self.lyrics.retro = on
+        self.lyrics.queue_draw()
         self._set_pill(self.ascii_button, on)
-        self.settings.set("ascii", on)
+        ctx = self.frame.get_style_context()
+        (ctx.add_class if on else ctx.remove_class)("np-retro")
+        self.scanlines.set_visible(on)
+        self._paint_bg()
+        for row in self.queue_list.get_children():
+            for image in _find_images(row):
+                original = getattr(image, "original", None)
+                if original is not None:
+                    image.set_from_pixbuf(green_tint(original) if on else original)
+
+    def _draw_scanlines(self, widget, cr):
+        w, h = widget.get_allocated_width(), widget.get_allocated_height()
+        CoverView._rounded(cr, 0, 0, w, h, 12)
+        cr.clip()
+        cr.set_source_rgba(0, 0, 0, 0.22)
+        y = 0
+        while y < h:
+            cr.rectangle(0, y, w, 1)
+            y += 3
+        cr.fill()
+        # faint green glow, like an old CRT
+        glow = cairo.RadialGradient(w / 2, h / 2, min(w, h) * 0.2, w / 2, h / 2, max(w, h) * 0.75)
+        glow.add_color_stop_rgba(0, *TERM_GREEN, 0.035)
+        glow.add_color_stop_rgba(1, 0, 0, 0, 0.25)
+        cr.set_source(glow)
+        cr.paint()
+        return False
 
     def _toggle_lyrics(self):
         on = not self.lyrics.get_visible()
@@ -1486,9 +1743,11 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             if isinstance(path, Exception):
                 return
             try:
-                image.set_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 40, 40, True))
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 40, 40, True)
             except GLib.Error:
-                pass
+                return
+            image.original = pixbuf
+            image.set_from_pixbuf(green_tint(pixbuf) if self.retro else pixbuf)
         run_async(lambda: cached_download(url), done)
 
     def _on_queue_row(self, _list, row):
@@ -1537,7 +1796,7 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         else:
             text = ""
         self.queue_note.set_text(text)
-        self.queue_note.set_visible(bool(text))
+        self.queue_note.set_visible(bool(text) and getattr(self, "queue_shown", True))
 
     def toggle_pin(self):
         pinned = not self.settings.get_bool("pinned", False)
@@ -1774,9 +2033,17 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             left_w = inner
         self.left.set_natural(left_w)
         self.body.set_child_packing(self.left, not lyrics_on, True, 0, Gtk.PackType.START)
-        # The cover gets the room the rest of the left column leaves over.
-        # (the queue keeps room for about three songs)
-        cover = int(min(left_w * 0.48, (h - 400) if h > 490 else h * 0.18, 460))
+        # Small window: drop the queue and give its room to the cover.
+        show_queue = h >= 560
+        if show_queue != self.queue_shown:
+            self.queue_shown = show_queue
+            self.queue_header.set_visible(show_queue)
+            self.queue_stack.set_visible(show_queue)
+            self._update_queue_note()
+        # The cover gets the room the rest of the left column leaves over
+        # (with the queue showing, it keeps room for about three songs).
+        room = (h - 400) if show_queue else (h - 235)
+        cover = int(min(left_w * 0.48, room if room > 90 else h * 0.2, 460))
         self.cover.set_natural(max(CoverView.MIN, cover))
         big = self.fullscreen_on or (w > 1150 and h > 750)
         ctx = self.frame.get_style_context()

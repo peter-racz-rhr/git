@@ -1,8 +1,12 @@
 # Now Playing
 
-A Spotify widget for Linux Mint: album cover (as a picture or old-school
-ASCII art), progress bar, controls, the upcoming songs in your queue, and lyrics that type
-themselves in a little terminal, in sync with the song.
+A Spotify widget for Linux Mint: album cover, progress bar, controls, the upcoming songs in
+your queue, and lyrics in sync with the song. Two looks:
+
+- **Normal:** the background takes the album's color, and the lyrics are big and bold. The
+  current line fills up while it is sung and scrolls along smoothly.
+- **Retro (ASCII button):** a green-on-black terminal with scanlines. The cover becomes
+  detailed ASCII art, and the lyrics type themselves out at a terminal prompt.
 
 ## Install
 
@@ -35,8 +39,8 @@ Disconnect any time from the gear button.
 
 | Control | What it does |
 |---|---|
-| **ASCII** | show the cover as green terminal ASCII art |
-| **LYRICS** | show / hide the lyrics terminal |
+| **ASCII** | switch between the normal look and the retro terminal look |
+| **LYRICS** | show / hide the lyrics |
 | pin | keep the widget above other windows (off by default) |
 | gear | connect / disconnect your Spotify account |
 | fullscreen button / F11 / double-click the top bar | fullscreen (Esc or F11 to leave) |
@@ -47,14 +51,15 @@ Disconnect any time from the gear button.
 | `[` / `]` | lyrics a quarter second earlier / later (when the lyrics are off for a song) |
 | Space / Left / Right | play-pause / previous / next (when the widget is focused) |
 | Esc | hide the widget |
-| top bar | drag to move; bottom-right corner resizes (everything scales with the window) |
+| top bar | drag to move; bottom-right corner resizes (everything scales with the window; in a small window the queue is hidden) |
 
 The background color follows the album cover.
 
 ## Lyrics
 
 Lyrics come from [LRCLIB](https://lrclib.net), a free lyrics database. Most songs have
-timed lyrics, so every line types itself out at the moment it is sung. For songs with only
+timed lyrics, so every line lights up (or types itself out, in retro mode) at the moment it
+is sung. For songs with only
 plain lyrics, the lines are spread over the length of the song. Some songs have no lyrics
 there at all; the terminal says so.
 
