@@ -5,7 +5,7 @@ your queue, and lyrics in sync with the song. Two looks:
 
 - **Normal:** the background takes the album's color, and the lyrics are big and bold. The
   current line fills up while it is sung and scrolls along smoothly.
-- **Retro (ASCII button):** a green-on-black terminal with scanlines. The cover becomes
+- **Retro (ASCII button):** a green-on-black (pure black) terminal with scanlines. The cover becomes
   detailed ASCII art, and the lyrics type themselves out at a terminal prompt.
 
 ## Install
@@ -41,6 +41,7 @@ Disconnect any time from the gear button.
 |---|---|
 | **ASCII** | switch between the normal look and the retro terminal look |
 | **LYRICS** | show / hide the lyrics |
+| **LYRICS ONLY** / `L` | only the lyrics, big, with the song name and previous / play / next at the bottom |
 | pin | keep the widget above other windows (off by default) |
 | gear | connect / disconnect your Spotify account |
 | fullscreen button / F11 / double-click the top bar | fullscreen (Esc or F11 to leave) |

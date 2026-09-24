@@ -60,7 +60,7 @@ USER_AGENT = "NowPlaying-widget/1.0 (personal Linux desktop widget)"
 
 TERM_GREEN = (0.22, 1.0, 0.42)
 TERM_DIM = (0.12, 0.55, 0.25)
-TERM_BG = (0.03, 0.06, 0.04)
+TERM_BG = (0.0, 0.0, 0.0)
 ASCII_RAMP = " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
 DEFAULT_BG = (0.09, 0.09, 0.09)
 
@@ -135,6 +135,8 @@ window.np { background-color: transparent; }
 .np-retro scale highlight, .np-retro scale:hover highlight { background-color: #39ff6a; border-radius: 0; }
 .np-retro scale slider { background-color: #39ff6a; border-radius: 0; }
 .np-retro row:hover { background-color: rgba(57,255,106,0.12); }
+.np-frame label.np-focus-title { font-size: 12pt; font-weight: bold; }
+.np-big label.np-focus-title { font-size: 16pt; }
 .np-big .np-title { font-size: 30pt; }
 .np-big .np-artist { font-size: 18pt; }
 .np-big label.np-album { font-size: 14pt; }
@@ -806,6 +808,7 @@ class LyricsView(Gtk.DrawingArea):
         self.set_size_request(170, -1)
         self.font_size = 10.5
         self.retro = False
+        self.focus = False
         self._scroll = None
         self._last_frame = time.monotonic()
         self._bold_cache = None
@@ -931,7 +934,7 @@ class LyricsView(Gtk.DrawingArea):
         self._last_frame = now
         pad = 14
         width = max(40, w - 2 * pad)
-        size = round(self.font_size * 1.85, 1)
+        size = round(self.font_size * (2.3 if self.focus else 1.85), 1)
         font = Pango.FontDescription.from_string(f"Sans Bold {size}")
 
         def message(text):
@@ -1200,6 +1203,13 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.lyrics_button.connect("clicked", lambda *_: self._toggle_lyrics())
         header.pack_start(self.lyrics_button, False, False, 0)
 
+        self.focus_button = Gtk.Button(label="LYRICS ONLY")
+        self.focus_button.set_tooltip_text("Show only the lyrics (L)")
+        self.focus_button.get_style_context().add_class("np-pill")
+        self.focus_button.set_can_focus(False)
+        self.focus_button.connect("clicked", lambda *_: self.toggle_focus())
+        header.pack_start(self.focus_button, False, False, 0)
+
         self.pin_button = icon_button(["view-pin-symbolic", "emblem-important-symbolic"], "pin",
                                       "Keep the widget above other windows", 16)
         self.pin_button.connect("clicked", lambda *_: self.toggle_pin())
@@ -1223,7 +1233,10 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         body.set_margin_start(16)
         body.set_margin_end(16)
         body.set_margin_top(10)
-        self.frame.pack_start(body, True, True, 0)
+        self.pages = Gtk.Stack()
+        self.pages.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.pages.add_named(body, "player")
+        self.frame.pack_start(self.pages, True, True, 0)
 
         left = self.left = FlexColumn()
         body.pack_start(left, False, True, 0)
@@ -1376,6 +1389,37 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.lyrics.set_no_show_all(True)
         body.pack_start(self.lyrics, True, True, 0)
 
+        # "lyrics only" page: the lyrics fill the widget, a small bar below
+        self.focus_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.focus_page.set_margin_start(16)
+        self.focus_page.set_margin_end(16)
+        self.focus_page.set_margin_top(10)
+        self.focus_holder = Gtk.Box()
+        self.focus_page.pack_start(self.focus_holder, True, True, 0)
+        bar = Gtk.Box(spacing=8)
+        now = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+        self.focus_title = Gtk.Label(xalign=0)
+        self.focus_title.set_ellipsize(Pango.EllipsizeMode.END)
+        self.focus_title.get_style_context().add_class("np-focus-title")
+        self.focus_artist = Gtk.Label(xalign=0)
+        self.focus_artist.set_ellipsize(Pango.EllipsizeMode.END)
+        self.focus_artist.get_style_context().add_class("np-dim")
+        now.pack_start(self.focus_title, False, False, 0)
+        now.pack_start(self.focus_artist, False, False, 0)
+        bar.pack_start(now, True, True, 0)
+        focus_prev = icon_button(["media-skip-backward-symbolic"], "\u23ee", "Previous", 18)
+        focus_prev.connect("clicked", lambda *_: self.mpris.previous())
+        bar.pack_start(focus_prev, False, False, 0)
+        self.focus_play = icon_button(["media-playback-start-symbolic"], "\u25b6", "Play / pause", 18, "np-play")
+        self.focus_play.connect("clicked", lambda *_: self.play_pause())
+        bar.pack_start(self.focus_play, False, False, 0)
+        focus_next = icon_button(["media-skip-forward-symbolic"], "\u23ed", "Next", 18)
+        focus_next.connect("clicked", lambda *_: self.mpris.next())
+        bar.pack_start(focus_next, False, False, 0)
+        self.focus_page.pack_start(bar, False, False, 0)
+        self.pages.add_named(self.focus_page, "focus")
+        self.focus_on = False
+
         # footer: resize grip
         footer = Gtk.Box()
         footer.set_margin_end(4)
@@ -1457,13 +1501,37 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             cr.rectangle(0, y, w, 1)
             y += 3
         cr.fill()
-        # faint green glow, like an old CRT
-        glow = cairo.RadialGradient(w / 2, h / 2, min(w, h) * 0.2, w / 2, h / 2, max(w, h) * 0.75)
-        glow.add_color_stop_rgba(0, *TERM_GREEN, 0.035)
-        glow.add_color_stop_rgba(1, 0, 0, 0, 0.25)
-        cr.set_source(glow)
-        cr.paint()
         return False
+
+    def toggle_focus(self):
+        """Lyrics-only mode: move the lyrics view to its own page and back."""
+        self.focus_on = not self.focus_on
+        parent = self.lyrics.get_parent()
+        if parent is not None:
+            parent.remove(self.lyrics)
+        if self.focus_on:
+            self.focus_holder.pack_start(self.lyrics, True, True, 0)
+            self.lyrics.show()
+            self.pages.set_visible_child_name("focus")
+        else:
+            self.body.pack_start(self.lyrics, True, True, 0)
+            self.lyrics.set_visible(self.lyrics_button_on())
+            self.pages.set_visible_child_name("player")
+        self.lyrics.focus = self.focus_on
+        self.lyrics._bold_cache = None
+        self.lyrics._scroll = None
+        self._set_pill(self.focus_button, self.focus_on)
+        self.lyrics_button.set_sensitive(not self.focus_on)
+        self._sync_focus_bar()
+        self._schedule_layout()
+
+    def _sync_focus_bar(self):
+        title = self.title_label.get_text()
+        artist = self.artist_label.get_text()
+        if self.focus_title.get_text() != title:
+            self.focus_title.set_text(title)
+        if self.focus_artist.get_text() != artist:
+            self.focus_artist.set_text(artist)
 
     def _toggle_lyrics(self):
         on = not self.lyrics.get_visible()
@@ -1828,10 +1896,11 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.mpris.play_pause()
 
     def _update_play_icon(self):
-        if self.playing:
-            set_button_icon(self.play_button, ["media-playback-pause-symbolic"], "❚❚", 18)
-        else:
-            set_button_icon(self.play_button, ["media-playback-start-symbolic"], "▶", 18)
+        for button in (self.play_button, self.focus_play):
+            if self.playing:
+                set_button_icon(button, ["media-playback-pause-symbolic"], "\u275a\u275a", 18)
+            else:
+                set_button_icon(button, ["media-playback-start-symbolic"], "\u25b6", 18)
 
     def toggle_shuffle(self):
         self.shuffle = not self.shuffle
@@ -1933,6 +2002,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             self.progress.set_value(pos / duration * 1000 if duration else 0)
             self._updating = False
             self.elapsed_label.set_text(fmt_time(pos))
+        if self.focus_on:
+            self._sync_focus_bar()
         return True
 
     # ---------------------------------------------------------------- Spotify account setup
@@ -2025,6 +2096,11 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
     def _relayout(self):
         self._layout_id = 0
         w, h = self.get_size()
+        if self.focus_on:
+            self.lyrics.font_size = round(10.5 * min(2.6, max(1.0, h / 480)), 1)
+            ctx = self.frame.get_style_context()
+            (ctx.add_class if self.fullscreen_on else ctx.remove_class)("np-big")
+            return False
         lyrics_on = self.lyrics.get_visible()
         inner = max(200, w - 32)
         if lyrics_on:
@@ -2106,6 +2182,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             self.mpris.next()
         elif key == Gdk.KEY_Left:
             self.mpris.previous()
+        elif key in (Gdk.KEY_l, Gdk.KEY_L):
+            self.toggle_focus()
         elif key == Gdk.KEY_F11:
             self.toggle_fullscreen()
         elif key == Gdk.KEY_Escape:
