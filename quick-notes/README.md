@@ -10,6 +10,9 @@ cd quick-notes
 ./install.sh
 ```
 
+Running `./install.sh` again always removes the old version first and installs the new one.
+Your notes are kept.
+
 The installer:
 - adds **Quick Notes** to your menu
 - starts it on login, so your notes come back after a restart
@@ -25,6 +28,11 @@ Want a different shortcut? `SHORTCUT='<Super>n' ./install.sh`, or put it in
 shortcut=<Primary><Alt>k
 ```
 
+Prefer to set the shortcut yourself in Mint's Keyboard settings? Install with
+`SHORTCUT=none ./install.sh` so the built-in one is off, then add a custom shortcut in
+*Keyboard > Shortcuts > Custom Shortcuts* with the command `~/.local/bin/quick-notes --new`
+(written out in full, e.g. `/home/you/.local/bin/quick-notes --new`).
+
 Uninstall with `./uninstall.sh`. Your notes are kept unless you run `./uninstall.sh --delete-notes`.
 
 ## Using a note
@@ -32,7 +40,7 @@ Uninstall with `./uninstall.sh`. Your notes are kept unless you run `./uninstall
 | Control | What it does |
 |---|---|
 | Ctrl+Alt+N | new note at the mouse pointer |
-| Enter | finish the note: it becomes read-only |
+| Enter | finish the note: it becomes read-only and only the x stays visible |
 | Shift+Enter | new line |
 | double-click | edit a finished note again |
 | **+** | another new note |

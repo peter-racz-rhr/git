@@ -77,35 +77,8 @@ Extensions=any;
 EOF
 fi
 
-# Keyboard shortcut: the app grabs it itself (the desktop's own shortcut settings
-# did not pick up shortcuts added by a script). Remove entries older versions added.
-if command -v gsettings >/dev/null 2>&1 && gsettings list-schemas | grep -qx org.cinnamon.desktop.keybindings; then
-    /usr/bin/python3 - <<'PY'
-import ast, subprocess
-schema = "org.cinnamon.desktop.keybindings"
-custom = "org.cinnamon.desktop.keybindings.custom-keybinding"
-base = "/org/cinnamon/desktop/keybindings/custom-keybindings/"
-get = lambda s, k: subprocess.run(["gsettings", "get", s, k], capture_output=True, text=True).stdout.strip()
-try:
-    names = ast.literal_eval(get(schema, "custom-list").replace("@as ", "") or "[]")
-except (ValueError, SyntaxError):
-    names = []
-keep = []
-for n in names:
-    path = f"{custom}:{base}{n}/"
-    if "drop-shelf" in get(path, "command"):
-        for key in ("name", "command", "binding"):
-            subprocess.run(["gsettings", "reset", path, key])
-    else:
-        keep.append(n)
-if keep != names:
-    subprocess.run(["gsettings", "set", schema, "custom-list", repr(keep)])
-PY
-fi
-if command -v dconf >/dev/null 2>&1; then
-    dconf reset -f /org/mate/desktop/keybindings/drop-shelf/ 2>/dev/null || true
-fi
-
+# Keyboard shortcut: the app grabs it itself. A shortcut you set up in the
+# Keyboard settings is left alone.
 CONFIG="$HOME/.config/drop-shelf/settings.ini"
 if [ -n "$SHORTCUT" ]; then
     mkdir -p "$(dirname "$CONFIG")"
@@ -124,7 +97,7 @@ PY
 fi
 
 # Start it now (restart it if an older copy is already running)
-if pgrep -f drop_shelf.py >/dev/null; then
+if pgrep -f '^/usr/bin/python3[.0-9]* [^ ]*/drop_shelf[.]py' >/dev/null; then
     "$BIN" --quit >/dev/null 2>&1 || true
     sleep 1
 fi

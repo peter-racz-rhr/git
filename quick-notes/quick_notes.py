@@ -16,6 +16,8 @@ Inside a note:
 The shortcut can be changed in ~/.config/quick-notes/settings.ini:
     [quick-notes]
     shortcut=<Super>n
+Use shortcut=none to turn the built-in shortcut off (e.g. when you set one up in
+the Keyboard settings with the command: quick-notes --new).
 """
 
 import ctypes
@@ -85,7 +87,6 @@ window.note { background-color: transparent; }
 .note button:hover { background-color: rgba(0,0,0,0.09); }
 .note button:checked { background-color: rgba(0,0,0,0.17); }
 .note .grip { color: rgba(0,0,0,0.35); padding: 0 3px; }
-.note .hint { color: rgba(0,0,0,0.4); font-size: small; padding: 3px 4px; }
 .swatch { min-width: 16px; min-height: 16px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.3); }
 """
     for name, (body, header) in COLORS.items():
@@ -372,14 +373,6 @@ class Note(Gtk.Window):
         box_button.connect("clicked", lambda *_: self.toggle_checkbox_lines())
         self.tools.pack_start(box_button, False, False, 0)
 
-        for child in self.tools.get_children():
-            child.show_all()
-        self.tools.set_no_show_all(True)
-
-        self.hint = Gtk.Label(label="double-click to edit")
-        self.hint.get_style_context().add_class("hint")
-        self.hint.set_no_show_all(True)
-        footer.pack_start(self.hint, False, False, 4)
 
         grip = Gtk.EventBox()
         grip_label = Gtk.Label(label="◢")
@@ -390,6 +383,12 @@ class Note(Gtk.Window):
         grip.connect("realize", lambda w: w.get_window().set_cursor(
             Gdk.Cursor.new_from_name(w.get_display(), "se-resize")))
         footer.pack_end(grip, False, False, 0)
+
+        # Everything except the x disappears while the note is finished.
+        self.edit_widgets = [new_button, self.color_button, self.lock_button, self.tools, grip]
+        for widget in self.edit_widgets:
+            widget.show_all()
+            widget.set_no_show_all(True)
 
         self.buffer.connect_after("insert-text", self._on_insert_text)
         self.buffer.connect("changed", self._on_changed)
@@ -572,8 +571,9 @@ class Note(Gtk.Window):
     def _apply_finished(self):
         self.view.set_editable(not self.finished)
         self.view.set_cursor_visible(not self.finished)
-        self.tools.set_visible(not self.finished)
-        self.hint.set_visible(self.finished)
+        for widget in self.edit_widgets:
+            widget.set_visible(not self.finished)
+        self.view.set_tooltip_text("Double-click to edit" if self.finished else None)
 
     def set_finished(self, finished):
         self.finished = finished
@@ -732,8 +732,11 @@ class QuickNotesApp(Gtk.Application):
 
         self.hotkey = GlobalHotkey(self.new_note)
         wanted = self._configured_shortcut()
-        active = self.hotkey.start([wanted] if wanted else DEFAULT_SHORTCUTS)
-        if active is None:
+        if wanted and wanted.lower() in ("none", "off"):
+            active = None      # the user set a shortcut in the desktop's keyboard settings instead
+        else:
+            active = self.hotkey.start([wanted] if wanted else DEFAULT_SHORTCUTS)
+        if active is None and not (wanted and wanted.lower() in ("none", "off")):
             print(f"quick-notes: could not use the shortcut {wanted or DEFAULT_SHORTCUTS[0]} "
                   "(taken by another program?)", file=sys.stderr)
         try:
