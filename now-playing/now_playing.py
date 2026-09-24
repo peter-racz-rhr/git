@@ -992,14 +992,14 @@ class LyricsView(Gtk.DrawingArea):
         key = (id(self.lines), width, size)
         if self._bold_cache is None or self._bold_cache[0] != key:
             layouts, tops, y = [], [], 0
-            gap = size * 1.45
+            gap = size * 0.6
             for _t, text in self.lines:
                 layout = PangoCairo.create_layout(cr)
                 layout.set_font_description(font)
                 layout.set_width(int(width * Pango.SCALE))
                 layout.set_wrap(Pango.WrapMode.WORD_CHAR)
                 if hasattr(layout, "set_line_spacing"):
-                    layout.set_line_spacing(1.12)
+                    layout.set_line_spacing(1.0)
                 layout.set_text(text or "\u266a", -1)
                 layouts.append(layout)
                 tops.append(y)
