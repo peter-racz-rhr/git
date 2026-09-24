@@ -67,5 +67,5 @@ fi
 nohup "$BIN" >/dev/null 2>&1 &
 
 say "Done! Now Playing is open. You also find it in the menu."
-say "Click the gear button once to connect your Spotify account (for the queue)."
+say "Open the menu (top right) > Connect Spotify account once, for the queue."
 say "Keyboard shortcut command (Keyboard > Shortcuts > Custom): $BIN --toggle"

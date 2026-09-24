@@ -13,7 +13,7 @@ Usage:
 
 Playback control uses the Spotify desktop app over D-Bus (MPRIS). The queue,
 shuffle, repeat, volume and seeking use the Spotify Web API, which needs a
-one-time login with your own Spotify developer app (see the gear button).
+one-time login with your own Spotify developer app (menu > Connect Spotify account).
 Lyrics come from lrclib.net.
 """
 
@@ -138,6 +138,17 @@ window.np { background-color: transparent; }
 .np-frame label.np-focus-title { font-size: 12pt; font-weight: bold; }
 .np-big label.np-focus-title { font-size: 16pt; }
 .np-frame.np-fullscreen { border-radius: 0; border: none; }
+.np-menu { background-color: #1f1f1f; border: 1px solid rgba(255,255,255,0.12); padding: 4px 0; }
+.np-menu menuitem { background-color: transparent; padding: 5px 14px; }
+.np-menu menuitem label { color: #f2f2f2; }
+.np-menu menuitem:hover { background-color: rgba(255,255,255,0.10); }
+.np-menu separator { background-color: rgba(255,255,255,0.12); margin: 3px 0; }
+.np-menu check { color: #1ed760; }
+.np-menu-retro, .np-menu-retro menuitem { background-color: #000000; font-family: Monospace; }
+.np-menu-retro menuitem label { color: #39ff6a; }
+.np-menu-retro menuitem:hover { background-color: #39ff6a; }
+.np-menu-retro menuitem:hover label { color: #000000; }
+.np-menu-retro separator { background-color: rgba(57,255,106,0.3); }
 .np-big .np-title { font-size: 30pt; }
 .np-big .np-artist { font-size: 18pt; }
 .np-big label.np-album { font-size: 14pt; }
@@ -935,8 +946,28 @@ class LyricsView(Gtk.DrawingArea):
         self._last_frame = now
         pad = 14
         width = max(40, w - 2 * pad)
-        size = round(self.font_size * (2.3 if self.focus else 1.85), 1)
-        font = Pango.FontDescription.from_string(f"Sans Bold {size}")
+        size = round(self.font_size * (2.45 if self.focus else 2.0), 1)
+        font = Pango.FontDescription.from_string(f"Noto Sans,Ubuntu,Cantarell,DejaVu Sans {size}")
+        font.set_weight(Pango.Weight.HEAVY)
+        stroke = max(0.6, size * 0.055)    # a thin outline makes the letters extra chunky
+
+        def paint(layout, x, y, alpha, clip=None):
+            # Draw opaque in a group, then fade the whole thing, so the outline
+            # and the fill don't add up to a darker edge.
+            cr.push_group()
+            if clip is not None:
+                for rect in clip:
+                    cr.rectangle(*rect)
+                cr.clip()
+            cr.move_to(x, y)
+            PangoCairo.layout_path(cr, layout)
+            cr.set_source_rgb(1, 1, 1)
+            cr.fill_preserve()
+            cr.set_line_width(stroke)
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            cr.stroke()
+            cr.pop_group_to_source()
+            cr.paint_with_alpha(alpha)
 
         def message(text):
             layout = PangoCairo.create_layout(cr)
@@ -944,9 +975,7 @@ class LyricsView(Gtk.DrawingArea):
             layout.set_width(int(width * Pango.SCALE))
             layout.set_wrap(Pango.WrapMode.WORD_CHAR)
             layout.set_text(text, -1)
-            cr.set_source_rgba(1, 1, 1, 0.45)
-            cr.move_to(pad, h * 0.35)
-            PangoCairo.show_layout(cr, layout)
+            paint(layout, pad, h * 0.35, 0.45)
 
         if self.state not in ("synced", "plain") or not self.lines:
             since = now - self.changed_at
@@ -963,12 +992,14 @@ class LyricsView(Gtk.DrawingArea):
         key = (id(self.lines), width, size)
         if self._bold_cache is None or self._bold_cache[0] != key:
             layouts, tops, y = [], [], 0
-            gap = size * 0.9
+            gap = size * 1.45
             for _t, text in self.lines:
                 layout = PangoCairo.create_layout(cr)
                 layout.set_font_description(font)
                 layout.set_width(int(width * Pango.SCALE))
                 layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+                if hasattr(layout, "set_line_spacing"):
+                    layout.set_line_spacing(1.12)
                 layout.set_text(text or "\u266a", -1)
                 layouts.append(layout)
                 tops.append(y)
@@ -990,27 +1021,29 @@ class LyricsView(Gtk.DrawingArea):
             lh = layout.get_pixel_size()[1]
             if y + lh < 0 or y > h:
                 continue
-            cr.move_to(pad, y)
             if i == current:
                 t, text = self.lines[i]
                 text = text or "\u266a"
                 nxt = self.lines[i + 1][0] if i + 1 < len(self.lines) else t + 4000
                 duration = max(800, min(8000, nxt - t)) * 0.85
                 done = int(len(text) * min(1.0, max(0.0, (pos - t) / duration)))
-                esc = GLib.markup_escape_text
-                layout.set_markup(f"<span foreground='#ffffff'>{esc(text[:done])}</span>"
-                                  f"<span foreground='#ffffff' alpha='55%'>{esc(text[done:])}</span>", -1)
-                cr.set_source_rgba(1, 1, 1, 1)
-                PangoCairo.show_layout(cr, layout)
-                layout.set_text(text, -1)
+                # dim version first, then the sung part bright on top of it
+                paint(layout, pad, y, 0.5)
+                if done:
+                    edge = layout.index_to_pos(len(text[:done].encode()))
+                    ex, ey = edge.x / Pango.SCALE, edge.y / Pango.SCALE
+                    eh = edge.height / Pango.SCALE
+                    clip = [(0, 0, w, y + ey), (0, y + ey, pad + ex, eh + 2)]
+                    if done >= len(text):
+                        clip = [(0, 0, w, h)]
+                    paint(layout, pad, y, 1.0, clip)
             else:
                 distance = i - current
                 if distance < 0:
-                    alpha = max(0.10, 0.34 - 0.06 * (-distance - 1))
+                    alpha = max(0.10, 0.32 - 0.06 * (-distance - 1))
                 else:
-                    alpha = max(0.12, 0.55 - 0.09 * (distance - 1))
-                cr.set_source_rgba(1, 1, 1, alpha)
-                PangoCairo.show_layout(cr, layout)
+                    alpha = max(0.12, 0.5 - 0.09 * (distance - 1))
+                paint(layout, pad, y, alpha)
         group = cr.pop_group()
         # soft fade at the top and bottom edge
         mask = cairo.LinearGradient(0, 0, 0, h)
@@ -1191,38 +1224,35 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         self.ascii_button.get_style_context().add_class("np-pill")
         self.ascii_button.set_can_focus(False)
         self.ascii_button.connect("clicked", lambda *_: self._toggle_ascii())
-        header.pack_start(self.ascii_button, False, False, 0)
 
         self.lyrics_button = Gtk.Button(label="LYRICS")
         self.lyrics_button.set_tooltip_text("Show the lyrics terminal")
         self.lyrics_button.get_style_context().add_class("np-pill")
         self.lyrics_button.set_can_focus(False)
         self.lyrics_button.connect("clicked", lambda *_: self._toggle_lyrics())
-        header.pack_start(self.lyrics_button, False, False, 0)
 
         self.focus_button = Gtk.Button(label="LYRICS ONLY")
         self.focus_button.set_tooltip_text("Show only the lyrics (L)")
         self.focus_button.get_style_context().add_class("np-pill")
         self.focus_button.set_can_focus(False)
         self.focus_button.connect("clicked", lambda *_: self.toggle_focus())
-        header.pack_start(self.focus_button, False, False, 0)
 
         self.pin_button = icon_button(["view-pin-symbolic", "emblem-important-symbolic"], "pin",
                                       "Keep the widget above other windows", 16)
         self.pin_button.connect("clicked", lambda *_: self.toggle_pin())
-        header.pack_start(self.pin_button, False, False, 0)
 
         settings_button = icon_button(["emblem-system-symbolic", "preferences-system-symbolic"], "⚙",
                                       "Spotify account")
         settings_button.connect("clicked", lambda *_: self.open_setup())
-        header.pack_start(settings_button, False, False, 0)
 
         self.fullscreen_button = icon_button(["view-fullscreen-symbolic"], "⛶", "Fullscreen (F11)")
         self.fullscreen_button.connect("clicked", lambda *_: self.toggle_fullscreen())
-        header.pack_start(self.fullscreen_button, False, False, 0)
 
         close_button = icon_button(["window-close-symbolic"], "✕", "Close")
         close_button.connect("clicked", lambda *_: self.app.quit())
+        self.menu_button = icon_button(["open-menu-symbolic"], "\u2630", "Menu", 16)
+        self.menu_button.connect("clicked", lambda b: self._show_menu(b))
+        header.pack_start(self.menu_button, False, False, 0)
         header.pack_start(close_button, False, False, 0)
 
         # body: left column (player + queue), right column (lyrics terminal)
@@ -1502,6 +1532,40 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
         cr.fill()
         return False
 
+    def _show_menu(self, anchor):
+        """One small menu with every setting (rebuilt each time so it shows the current state)."""
+        menu = Gtk.Menu()
+        menu.get_style_context().add_class("np-menu")
+        if self.retro:
+            menu.get_style_context().add_class("np-menu-retro")
+
+        def check(label, active, callback):
+            item = Gtk.CheckMenuItem(label=label)
+            item.set_active(active)
+            item.connect("toggled", lambda *_: callback())
+            menu.append(item)
+
+        def action(label, callback):
+            item = Gtk.MenuItem(label=label)
+            item.connect("activate", lambda *_: callback())
+            menu.append(item)
+
+        check("Retro terminal look", self.retro, self._toggle_ascii)
+        check("Show lyrics", self.lyrics.get_visible() or self.focus_on, self._toggle_lyrics)
+        check("Lyrics only  (L)", self.focus_on, self.toggle_focus)
+        menu.append(Gtk.SeparatorMenuItem())
+        check("Keep on top", self.settings.get_bool("pinned", False), self.toggle_pin)
+        check("Fullscreen  (F11)", self.fullscreen_on, self.toggle_fullscreen)
+        menu.append(Gtk.SeparatorMenuItem())
+        action("Disconnect Spotify account\u2026" if self.web.connected else "Connect Spotify account\u2026",
+               self.open_setup)
+        action("Reload the queue", self._fetch_queue)
+        menu.append(Gtk.SeparatorMenuItem())
+        action("Quit", self.app.quit)
+        menu.show_all()
+        menu.attach_to_widget(anchor, None)
+        menu.popup_at_widget(anchor, Gdk.Gravity.SOUTH_EAST, Gdk.Gravity.NORTH_EAST, None)
+
     def toggle_focus(self):
         """Lyrics-only mode: move the lyrics view to its own page and back."""
         self.focus_on = not self.focus_on
@@ -1533,6 +1597,8 @@ class NowPlayingWindow(Gtk.ApplicationWindow):
             self.focus_artist.set_text(artist)
 
     def _toggle_lyrics(self):
+        if self.focus_on:
+            self.toggle_focus()
         on = not self.lyrics.get_visible()
         width, height = self.get_size()
         self.lyrics.set_visible(on)
@@ -2240,7 +2306,7 @@ def debug_queue():
     """Print exactly what the Spotify Web API reports, to compare with the Spotify app."""
     web = SpotifyWeb(Settings())
     if not web.connected:
-        print("Not connected: click the gear button in the widget first.")
+        print("Not connected: use the menu in the widget: Connect Spotify account.")
         return 1
     state = web.call("GET", "/me/player")
     if state is None:

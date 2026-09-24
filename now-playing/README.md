@@ -5,7 +5,7 @@ your queue, and lyrics in sync with the song. Two looks:
 
 - **Normal:** the background takes the album's color, and the lyrics are big and bold. The
   current line fills up while it is sung and scrolls along smoothly.
-- **Retro (ASCII button):** a green-on-black (pure black) terminal with scanlines. The cover becomes
+- **Retro (menu > Retro terminal look):** a green-on-black (pure black) terminal with scanlines. The cover becomes
   detailed ASCII art, and the lyrics type themselves out at a terminal prompt.
 
 ## Install
@@ -29,22 +29,19 @@ shuffle, repeat, volume and seeking need your Spotify developer app:
 1. Open <https://developer.spotify.com/dashboard> and open your app (or create one).
 2. In its **Settings**, add the Redirect URI `http://127.0.0.1:8888/callback` and save.
 3. Under **APIs used**, tick **Web API**.
-4. In the widget, click the **gear** button, paste the app's **Client ID** and press
+4. In the widget, open the **menu** (top right) > **Connect Spotify account**, paste the app's **Client ID** and press
    **Log in with Spotify**. Your browser opens; log in and allow access.
 
 The login is stored in `~/.config/now-playing/token.json` (only readable by you).
-Disconnect any time from the gear button.
+Disconnect any time from the same menu.
 
 ## Using it
 
 | Control | What it does |
 |---|---|
-| **ASCII** | switch between the normal look and the retro terminal look |
-| **LYRICS** | show / hide the lyrics |
-| **LYRICS ONLY** / `L` | only the lyrics, big, with the song name and previous / play / next at the bottom |
-| pin | keep the widget above other windows (off by default) |
-| gear | connect / disconnect your Spotify account |
-| fullscreen button / F11 / double-click the top bar | fullscreen (Esc or F11 to leave) |
+| menu button (three lines, top right) | all settings: retro terminal look, show lyrics, lyrics only, keep on top, fullscreen, Spotify account, reload the queue, quit |
+| `L` | lyrics only: big lyrics with the song name and previous / play / next at the bottom |
+| F11 / double-click the top bar | fullscreen (Esc or F11 to leave) |
 | progress bar | click or drag to jump in the song |
 | shuffle, previous, play/pause, next, repeat | as in Spotify (repeat: off > all > this song) |
 | volume slider | Spotify's volume |
