@@ -9,6 +9,7 @@ Usage:
     quick-notes --quit      close the app (notes are kept)
     quick-notes --shortcut  print the keyboard shortcut in use
     quick-notes --search    open the note search (Ctrl+Alt+F)
+    quick-notes --add-file=PATH   make a new note from a text file (used by Text Grab)
 
 Inside a note:
     Enter finishes the note (double-click to edit again), Shift+Enter new line
@@ -1277,7 +1278,20 @@ class QuickNotesApp(Gtk.Application):
         Gtk.Application.do_shutdown(self)
 
     def do_command_line(self, command_line):
-        args = set(command_line.get_arguments()[1:])
+        raw_args = command_line.get_arguments()[1:]
+        args = set(raw_args)
+        add_file = next((a.split("=", 1)[1] for a in raw_args if a.startswith("--add-file=")), None)
+        if add_file:
+            # text sent from another app (e.g. Text Grab) becomes a new note
+            try:
+                with open(add_file, encoding="utf-8") as f:
+                    text = f.read()
+                os.remove(add_file)
+            except OSError as e:
+                print(f"quick-notes: could not read {add_file}: {e}", file=sys.stderr)
+                return 1
+            self.new_note(text=text)
+            return 0
         if "--quit" in args:
             self.quit()
         elif "--restore" in args:
@@ -1293,7 +1307,7 @@ class QuickNotesApp(Gtk.Application):
         return 0
 
     # ---------------------------------------------------------------- notes
-    def new_note(self, near=None):
+    def new_note(self, near=None, text=None):
         w, h = DEFAULT_SIZE
         display = Gdk.Display.get_default()
         if near is not None:
@@ -1308,6 +1322,8 @@ class QuickNotesApp(Gtk.Application):
         y = min(max(y, area.y), area.y + area.height - h)
 
         note = Note(self, {"x": x, "y": y, "w": w, "h": h, "color": self.last_color})
+        if text:
+            note.buffer.set_text(text.strip())
         self.notes.append(note)
         note.focus_text()
         self.save_soon()
