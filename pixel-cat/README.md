@@ -37,7 +37,7 @@ Uninstall with `./uninstall.sh` (add `--forget` to also forget her name and mood
 | Rub the mouse back and forth over her | purrs, closes her eyes, and pixel hearts float up |
 | Click her | a heart |
 | Drag her | dangles from your pointer; let go (or throw her) and she lands on her feet |
-| Move a window she's sitting on | rides along |
+| Move a window she's sitting on | rides along, smoothly |
 | Close or minimize that window | falls and lands on whatever is below |
 | **Ctrl+Alt+C** | comes to your mouse: she runs, jumps from window to window and climbs up window sides to get there (and only pops over in a little cloud if there's really no way) |
 | Right-click her | her mood and needs, **Give a treat**, **Play with yarn**, **Send her to bed**, sounds on/off, exploring on/off, change coat or name |
@@ -45,7 +45,8 @@ Uninstall with `./uninstall.sh` (add `--forget` to also forget her name and mood
 | Watch a video or give a presentation in fullscreen | hides until you're done |
 
 When she falls from high up (a closed window, a throw, a drop from the top of the screen)
-she opens a little **parachute** and floats down.
+she opens a little **parachute** and floats down. For smaller drops a **trampoline** pops up
+under her and she bounces once or twice before landing.
 
 On her own she walks around, sits, grooms, yawns and naps (more at night and more when
 she's tired), jumps between windows, walks along the panel, and sometimes climbs up the
@@ -56,8 +57,8 @@ Quick Notes post-it.
 ## Bedtime
 
 Right-click > **Send her to bed** (it says "it's late!" in the evening). She puts on her
-pajamas and a nightcap, a little bed appears at the bottom of the screen, and she walks
-over, climbs in and sleeps. Pet her in bed and she purrs in her sleep.
+pajamas and a nightcap, a little bed appears in the bottom-left corner of the screen, and
+she makes her way there, climbs in and sleeps. Pet her in bed and she purrs in her sleep.
 
 - At night she sleeps until 7:00 in the morning, even if you shut the laptop down; during
   the day it's a 45-minute nap.

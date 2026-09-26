@@ -431,12 +431,20 @@ class Music:
 
 class Seg:
     """A horizontal line the cat can stand on."""
-    __slots__ = ("key", "y", "x1", "x2", "win_x", "kind", "note", "win_w", "win_h")
+    __slots__ = ("key", "y", "x1", "x2", "win_x", "kind", "note", "win_w", "win_h", "win_y")
 
-    def __init__(self, key, y, x1, x2, win_x=0, kind="floor", note=False, win_w=0, win_h=0):
+    def __init__(self, key, y, x1, x2, win_x=0, kind="floor", note=False, win_w=0, win_h=0, win_y=None):
         self.key, self.y, self.x1, self.x2 = key, y, x1, x2
         self.win_x, self.kind, self.note = win_x, kind, note
         self.win_w, self.win_h = win_w, win_h
+        self.win_y = y if win_y is None else win_y
+
+    def shift(self, dx, dy):
+        self.x1 += dx
+        self.x2 += dx
+        self.y += dy
+        self.win_x += dx
+        self.win_y += dy
 
 
 class World:
@@ -451,6 +459,7 @@ class World:
         self.stacking = ()
         self._extents = {}
         self.windows = []
+        self.by_xid = {}
         self.ledges = {}             # xid -> [(dx, dy, length)] relative to the window
         self.on_stacking_changed = None
         if self.screen is not None:
@@ -520,6 +529,7 @@ class World:
             self.fullscreen = bool(active is not None and active.is_fullscreen() and not active.is_minimized())
             self.stacking = tuple(u[0].get_xid() for u in usable)
             self.windows = [(u[0].get_xid(), u[1], u[2], u[3], u[4]) for u in usable]
+            self.by_xid = {u[0].get_xid(): u[0] for u in usable}
             for index, (w, x, y, width, height) in enumerate(usable):
                 xid = w.get_xid()
                 above = usable[index + 1:]
@@ -545,7 +555,7 @@ class World:
                             pieces = self._cut(pieces, ox, ox + ow)
                     for a, b in pieces:
                         if b - a >= 60:
-                            segs.append(Seg(("ledge", xid, dy), ly, a, b, x, "ledge", False, width, height))
+                            segs.append(Seg(("ledge", xid, dy), ly, a, b, x, "ledge", False, width, height, y))
         self.segments = segs
 
     def scan_ledges(self, exclude):
@@ -653,6 +663,18 @@ class World:
             if b < p2:
                 out.append((b, p2))
         return out
+
+    def window_pos(self, xid):
+        """Where a window is right now (Wnck keeps this up to date as it moves)."""
+        w = self.by_xid.get(xid)
+        if w is None:
+            return None
+        try:
+            x, y, _width, _height = w.get_geometry()
+        except Exception:
+            return None
+        left, _right, top, _bottom = self._frame_extents(xid)
+        return x + left, y + top
 
     def monitor_at(self, x, y):
         for geo, area in self.monitors:
@@ -871,6 +893,27 @@ class Overlay(Gtk.Window):
         return True
 
 
+class Trampoline(Overlay):
+    def __init__(self, scale, cx, base):
+        self.images = [sprites.render(sprites.PARTS[n], "tabby", scale) for n in ("TRAMPOLINE", "TRAMPOLINE_DOWN")]
+        super().__init__(self.images[0])
+        self.cx, self.base = cx, base
+        top = base - self.h + 1 * scale
+        self.mat_y = top + 2 * scale            # where her paws touch the mat
+        self.place(cx - self.w / 2, top)
+        self.show()
+
+    def squash(self):
+        self.surface = self.images[1]
+        self.queue_draw()
+        GLib.timeout_add(160, self._unsquash)
+
+    def _unsquash(self):
+        self.surface = self.images[0]
+        self.queue_draw()
+        return False
+
+
 def night(hour=None):
     hour = time.localtime().tm_hour if hour is None else hour
     return hour >= 20 or hour < 7
@@ -1080,6 +1123,9 @@ class Cat(Gtk.Window):
     def set_state(self, name, length=0.0, **data):
         if self.chute is not None and name != "fall":
             self._close_chute()
+        if self.state == "fall" and name != "fall" and self.data.get("tramp"):
+            t = self.data["tramp"][0]
+            GLib.timeout_add(700, lambda: (self.poof(t.cx, t.base), t.destroy()) and False)
         self.state, self.t, self.length, self.data = name, 0.0, length, data
         self.anim = 0.0
 
@@ -1101,6 +1147,7 @@ class Cat(Gtk.Window):
         self.t += dt
         self.anim += dt
         self._music(dt)
+        self._follow_window()
         getattr(self, "_st_" + self.state)(dt)
         for prop in list(self.props):
             prop.update(dt, self.world)
@@ -1119,7 +1166,8 @@ class Cat(Gtk.Window):
         if DEBUG_FILE and now - getattr(self, "_debug_at", 0) > 0.3:
             self._debug_at = now
             with open(DEBUG_FILE, "w") as f:
-                json.dump({"state": self.state, "hidden": self.hidden, "x": int(self.x), "y": int(self.y), "orient": self.orient,
+                json.dump({"state": self.state, "hidden": self.hidden, "chute": self.chute is not None,
+                           "tramp": bool(self.data.get("tramp")), "x": int(self.x), "y": int(self.y), "orient": self.orient,
                            "seg": str(self.seg.key) if self.seg else None, "headset": self.headset,
                            "win": self.pos, "props": [(p.kind, int(p.x), int(p.y), p.landed, int(p.vx), str(p.seg_key)) for p in self.props], "data": {k: v for k, v in self.data.items() if isinstance(v, (int, float, str))},
                            "pet": {k: round(getattr(self.pet, k), 1)
@@ -1167,6 +1215,29 @@ class Cat(Gtk.Window):
             gdk_window = w.get_window()
             if gdk_window is not None and w.get_visible():
                 gdk_window.raise_()
+
+    def _follow_window(self):
+        """While you drag the window she's on, move with it every frame (smooth)."""
+        s = self.seg
+        if s is None or s.kind not in ("win", "ledge") or self.orient != GROUND \
+                or self.state in ("jump", "fall", "held", "crouch_jump", "bed"):
+            return
+        pos = self.world.window_pos(s.key[1])
+        if pos is None:
+            return
+        dx, dy = pos[0] - s.win_x, pos[1] - s.win_y
+        if not dx and not dy:
+            return
+        for seg in self.world.segments:
+            if seg.key[:2] == s.key[:2] and seg is not s:
+                seg.shift(dx, dy)
+        s.shift(dx, dy)
+        self.x += dx
+        self.y += dy
+        for prop in self.props:
+            if prop.seg_key[:2] == s.key[:2]:
+                prop.x += dx
+                prop.y += dy
 
     def _reattach(self):
         """Ride along when her window moves; fall when it closes or gets covered."""
@@ -1469,8 +1540,19 @@ class Cat(Gtk.Window):
         before = self.y
         if self.chute is None:
             self.vy = min(self.vy + GRAVITY * dt, 1600)
-            if self.vy > 150 and self.t > 0.15 and self._drop_height() > 170 * self.scale / 2:
-                self._open_chute()
+            if self.vy > 60 and "tramp" not in self.data:
+                height = self._drop_height()
+                if height > 170 * self.scale / 2:
+                    if self.vy > 150:
+                        self._open_chute()
+                elif height > 60 * self.scale / 2:
+                    self._put_trampoline()
+                else:
+                    self.data["tramp"] = None
+        if self.data.get("tramp"):
+            cx = self.data["tramp"][0].cx          # aim for the middle of the trampoline
+            self.vx = 0.0
+            self.x += (cx - self.x) * min(1.0, dt * 8)
         if self.chute is not None:
             # float down gently, swaying a little
             target = 85 * self.scale / 2
@@ -1494,12 +1576,33 @@ class Cat(Gtk.Window):
             floor = self.world.floor_for(self.x)
             if floor is not None and self.y >= floor.y:
                 seg = floor
+        tramp = self.data.get("tramp")
+        if tramp is not None and self.data.get("bounces", 0) > 0 and self.vy > 0 \
+                and self.y >= tramp[0].mat_y and abs(self.x - tramp[0].cx) < tramp[0].w / 2:
+            # boing
+            self.data["bounces"] -= 1
+            self.y = tramp[0].mat_y - 1
+            self.vy = -min(abs(self.vy) * 0.75, 650)
+            tramp[0].squash()
+            return
         if seg is not None:
             self.seg = seg
             self.y = float(seg.y)
             self.x = clamp(self.x, seg.x1 + 8, seg.x2 - 8)
             self.vx = self.vy = 0.0
             self.set_state("land", 0.2)
+
+    def _put_trampoline(self):
+        seg = self.world.landing(self.x, self.y, 10 ** 6) or self.world.floor_for(self.x)
+        if seg is None:
+            self.data["tramp"] = None
+            return
+        cx = clamp(self.x + self.vx * 0.25, seg.x1 + 14 * self.scale, seg.x2 - 14 * self.scale)
+        tramp = Trampoline(self.scale, cx, seg.y)
+        self.data["tramp"] = (tramp, seg.key)
+        self.data["bounces"] = random.choice((1, 2))
+        self.vx *= 0.3
+        self.raise_all()
 
     def _drop_height(self):
         seg = self.world.landing(self.x, self.y, 10 ** 6) or self.world.floor_for(self.x)
@@ -2060,9 +2163,9 @@ class Cat(Gtk.Window):
         self.pet.wake_at = next_morning() if night() else time.time() + 45 * 60
         self.poof()
         self.pajamas = True
-        floor = self.world.floor_for(self.x)
-        margin = 30 * self.scale
-        bx = clamp(self.x, floor.x1 + margin, floor.x2 - margin)
+        # her bed goes in the bottom-left corner of the screen
+        floor = min((t for t in self.world.segments if t.kind == "floor"), key=lambda t: t.x1)
+        bx = floor.x1 + 18 * self.scale
         self._make_bed(bx)
         self.app.sounds.play("mrrp")
         if self.on_ground():

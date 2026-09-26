@@ -285,6 +285,26 @@ OTTTTTTTTTTTTTTTTTTTTTTTTTTTTO
 .OOOOOOOOOOOOOOOOOOOOOOOOOOOO.
 """
 
+TRAMPOLINE = """
+.OOOOOOOOOOOOOOOOOOOOOOOO.
+ORRRRRRRRRRRRRRRRRRRRRRRRO
+OFFFFFFFFFFFFFFFFFFFFFFFFO
+.OOOOOOOOOOOOOOOOOOOOOOOO.
+..OO..................OO..
+..OO..................OO..
+.OOOO................OOOO.
+"""
+
+TRAMPOLINE_DOWN = """
+..........................
+.OOO..................OOO.
+ORRROOOOOOOOOOOOOOOOOORRRO
+.OOFFFFFFFFFFFFFFFFFFFFOO.
+..OOOOOOOOOOOOOOOOOOOOOO..
+..OO..................OO..
+.OOOO................OOOO.
+"""
+
 COATS = {
     # key: (label, colors)
     "tabby": ("Orange tabby", dict(O="#3b2417", B="#f0a04b", S="#c4642a", L="#fbe3c0", X="#f0a04b",
