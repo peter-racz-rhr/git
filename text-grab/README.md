@@ -21,7 +21,8 @@ computer. Running it again updates it.
 2. Drag a box around the text (or QR code). **Esc** or right-click cancels.
 3. The text is **in your clipboard** - paste it anywhere with Ctrl+V.
 
-A small popup (same look as Drop Shelf) appears in the bottom-right corner. The first
+As soon as you let go of the mouse, a small popup (same look as Drop Shelf) appears in the
+bottom-right corner with "Reading the text...", then the text itself. The first
 lines fade out into the background, like the queue in Now Playing. It fades away after
 10 seconds, or stays while your mouse is on it. Click the text (or **Show all**) for the full text.
 

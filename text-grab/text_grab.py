@@ -590,10 +590,11 @@ class FadingText(Gtk.DrawingArea):
 class Popup(ShelfWindow):
     WIDTH = 360
 
-    def __init__(self, app, grab):
+    def __init__(self, app):
+        """Shows up right away with "Reading the text..."; set_grab() fills it in."""
         super().__init__("Text Grab")
         self.app = app
-        self.grab = grab
+        self.grab = None
         self.hovered = False
         self.closing = False
         self.set_skip_taskbar_hint(True)
@@ -603,13 +604,30 @@ class Popup(ShelfWindow):
         self.connect("enter-notify-event", lambda *_: self._hover(True))
         self.connect("leave-notify-event", self._on_leave)
 
-        if grab.text and os.path.exists(QUICK_NOTES):
-            note = self.add_header_button(icon_button(ICON_NOTE, "Note", "Put the text on a Quick Notes post-it"))
-            note.connect("clicked", lambda *_: (self.app.to_quick_notes(grab.text), self.destroy()))
+        self.note_button = self.add_header_button(
+            icon_button(ICON_NOTE, "Note", "Put the text on a Quick Notes post-it"))
+        self.note_button.connect("clicked", lambda *_: (self.app.to_quick_notes(self.grab.text), self.destroy()))
+        self.note_button.set_no_show_all(True)
         again = self.add_header_button(icon_button(ICON_GRAB, "Again", "Grab again"))
         again.connect("clicked", lambda *_: (self.destroy(), self.app.start_grab()))
         close = self.add_header_button(icon_button(ICON_CLOSE, "✕", "Close"))
         close.connect("clicked", lambda *_: self.destroy())
+
+        reading = Gtk.Box(spacing=8)
+        spinner = Gtk.Spinner()
+        spinner.start()
+        reading.pack_start(spinner, False, False, 0)
+        reading.pack_start(Gtk.Label(label="Reading the text…", xalign=0), True, True, 0)
+        self.body.pack_start(reading, False, False, 4)
+        self.footer.pack_start(self.status, True, True, 0)
+        self._place()
+
+    def set_grab(self, grab):
+        self.grab = grab
+        app = self.app
+        for child in self.body.get_children() + self.footer.get_children():
+            if child is not self.status:
+                child.destroy()
 
         for code in grab.qr[:2]:
             self.body.pack_start(qr_row(app, code), False, False, 0)
@@ -637,6 +655,7 @@ class Popup(ShelfWindow):
             show_all.set_can_focus(False)
             show_all.connect("clicked", lambda *_: self._show_all())
             self.footer.pack_start(show_all, False, False, 0)
+            self.footer.reorder_child(show_all, 0)
             lines = len(grab.text.splitlines())
             self.status.set_text(f"✓ Copied · {lines} line{'s' if lines != 1 else ''} · "
                                  f"{len(grab.text)} characters")
@@ -644,18 +663,18 @@ class Popup(ShelfWindow):
             self.status.set_text("✓ QR code copied")
         if self.status.get_text():
             self.status.get_style_context().add_class("tg-ok")
-        self.footer.pack_start(self.status, True, True, 0)
+        self.note_button.set_visible(bool(grab.text) and os.path.exists(QUICK_NOTES))
 
+        self.body.show_all()
+        self.footer.show_all()
+        self.resize(self.WIDTH, 1)          # shrink/grow to the new content
         self._place()
-        Gtk.Widget.set_opacity(self, 0)
-        self._fade_to(1)
         GLib.timeout_add_seconds(POPUP_SECONDS, self._auto_close)
 
     def _place(self):
         display = Gdk.Display.get_default()
         _screen, px, py = display.get_default_seat().get_pointer().get_position()
         area = display.get_monitor_at_point(px, py).get_workarea()
-        self.frame.show_all()
         _minimum, natural = self.frame.get_preferred_size()
         self.move(area.x + area.width - self.WIDTH - 16, area.y + area.height - natural.height - 16)
 
@@ -685,7 +704,7 @@ class Popup(ShelfWindow):
         GLib.timeout_add(16, tick)
 
     def _auto_close(self):
-        if self.hovered:
+        if self.hovered or self.grab is None:
             return True           # wait while the mouse is on it
         self.closing = True
         self._fade_to(0, self.destroy)
@@ -894,6 +913,7 @@ class TextGrabApp(Gtk.Application):
         if self.busy:
             return
         self.busy = True
+        self.close_popup()          # keep the old popup out of the picture
         # let popups / menus close before the picture is taken
         GLib.timeout_add(150, self._take_screenshot)
 
@@ -924,22 +944,30 @@ class TextGrabApp(Gtk.Application):
         self.process(pixbuf)
 
     def process(self, pixbuf):
-        grab = Grab(pixbuf)
+        # the popup shows up right away, and fills in once the text has been read
+        self.close_popup()
+        popup = self.popup = Popup(self)
+        popup.connect("destroy", lambda w: setattr(self, "popup", None) if self.popup is w else None)
+        popup.show_all()
 
-        def done():
-            self.busy = False
-            self.last = grab
-            if grab.text:
-                self.copy(grab.text)
-            elif grab.qr:
-                self.copy(grab.qr[0])
-            self.close_popup()
-            self.popup = Popup(self, grab)
-            self.popup.connect("destroy", lambda w: setattr(self, "popup", None) if self.popup is w else None)
-            self.popup.show_all()
+        def start():
+            grab = Grab(pixbuf)
+
+            def done():
+                self.busy = False
+                self.last = grab
+                if grab.text:
+                    self.copy(grab.text)
+                elif grab.qr:
+                    self.copy(grab.qr[0])
+                if self.popup is popup:
+                    popup.set_grab(grab)
+                return False
+
+            threading.Thread(target=lambda: (grab.read(), GLib.idle_add(done)), daemon=True).start()
             return False
 
-        threading.Thread(target=lambda: (grab.read(), GLib.idle_add(done)), daemon=True).start()
+        GLib.timeout_add(60, start)         # let the popup draw first
 
     # ---------------------------------------------------------------- actions
     def copy(self, text):
