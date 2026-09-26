@@ -36,7 +36,8 @@ lines fade out into the background, like the queue in Now Playing. It fades away
 | ◢ corner | resize the big window |
 | Esc / x | close |
 
-**QR codes**: grab one and its content (usually a link) is copied; **Open** opens the link.
+**QR codes**: grab one and its content (usually a link) is copied; the open icon opens the link in **Chrome** (put `browser=default` under `[text-grab]` in
+`~/.config/text-grab/settings.ini` to use the system default browser instead).
 
 **Images**: right-click a picture in the file manager > **Grab text from image**.
 

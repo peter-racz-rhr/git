@@ -17,6 +17,7 @@ Settings in ~/.config/text-grab/settings.ini:
     [text-grab]
     shortcut=<Primary><Alt>g     (none = off)
     languages=hun+eng+deu
+    browser=google-chrome        (default = the system default browser)
 """
 
 import ctypes
@@ -47,6 +48,9 @@ CACHE_DIR = os.path.join(GLib.get_user_cache_dir(), "text-grab")
 DEFAULT_SHORTCUTS = ["<Primary><Alt>g", "<Super><Shift>t", "<Primary><Alt>y"]
 DEFAULT_LANGUAGES = "hun+eng+deu"
 QUICK_NOTES = os.path.expanduser("~/.local/bin/quick-notes")
+# links open in Chrome (the first one found); browser=default in settings.ini uses the system default
+CHROME_IDS = ["google-chrome.desktop", "com.google.Chrome.desktop", "chromium.desktop",
+              "chromium-browser.desktop", "org.chromium.Chromium.desktop"]
 POPUP_SECONDS = 10
 
 CSS = b"""
@@ -84,6 +88,19 @@ def setting(key, default=None):
         return value or default
     except GLib.Error:
         return default
+
+
+def chrome():
+    """The browser for links: the one in settings.ini, else Chrome/Chromium; None = system default."""
+    choice = setting("browser")
+    if choice == "default":
+        return None
+    for desktop_id in ([choice] if choice else []) + CHROME_IDS:
+        try:
+            return Gio.DesktopAppInfo.new(desktop_id if desktop_id.endswith(".desktop") else desktop_id + ".desktop")
+        except TypeError:
+            continue
+    return None
 
 
 def installed_languages():
@@ -979,7 +996,11 @@ class TextGrabApp(Gtk.Application):
         if not re.match(r"^https?://", link, re.I):
             link = "https://" + link
         try:
-            Gio.AppInfo.launch_default_for_uri(link, None)
+            browser = chrome()
+            if browser:
+                browser.launch_uris([link], None)
+            else:
+                Gio.AppInfo.launch_default_for_uri(link, None)
         except GLib.Error as e:
             self.show_message(f"Could not open the link: {e.message}")
 
