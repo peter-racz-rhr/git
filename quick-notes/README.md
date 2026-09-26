@@ -46,7 +46,10 @@ Uninstall with `./uninstall.sh`. Your notes are kept unless you run `./uninstall
 | **+** | another new note |
 | dot button | change color: yellow, pink, green, blue, orange, purple or white. New notes use the color you picked last |
 | lock button | show this note on the lock screen (as the lock screen message) |
-| **x** | delete the note right away |
+| **x** | take the note off the screen - it goes to the archive and stays searchable |
+| magnifier / **Ctrl+Alt+F** | search all notes, on screen and archived |
+| padlock | lock the note with your master password (encrypted) |
+| screen button | show this note on the lock screen (not for locked notes) |
 | **B** / Ctrl+B | bold |
 | *I* / Ctrl+I | italic |
 | checkbox / Ctrl+T | turn the line into a checkbox. Click the box to tick it off (works on finished notes too) |
@@ -56,6 +59,30 @@ Uninstall with `./uninstall.sh`. Your notes are kept unless you run `./uninstall
 | bottom-right corner | resize |
 
 Notes are saved automatically while you type, in `~/.local/share/quick-notes/notes.json`.
+
+## Search and archive
+
+**x** no longer deletes a note: it goes to the archive, where it stays forever. Press
+**Ctrl+Alt+F** (or the magnifier on a note) and type anything - a name, "wifi", "+36" - and
+matching notes appear as you type, with the match highlighted. Accents don't matter ("cim"
+finds "cím"). For each result: **Copy**, **Show** / **Put back on screen**, and for archived
+notes **Delete forever** (click twice - this one can't be undone).
+
+## Locked notes (for passwords and other secrets)
+
+Click the **padlock** on a note to lock it. The first time you create a **master password**.
+
+- Locked notes are encrypted (AES-256-GCM, key derived from your password with scrypt).
+  The notes file only contains scrambled text for them - finding the file doesn't reveal them.
+- On screen a locked note shows only dots and an **Unlock** button. After unlocking it stays
+  open for 5 minutes after you last typed in it, then locks itself again.
+- The search only looks inside locked notes while they are unlocked.
+- **If you forget the master password, locked notes cannot be recovered.** Nobody can open
+  them without it - that is the point.
+- Needs the `python3-cryptography` package (the installer adds it if it's missing).
+
+A dedicated password manager (Bitwarden, KeePassXC) is still the safest place for important
+passwords; locked notes are good for everyday secrets.
 
 ## About the lock screen
 

@@ -8,6 +8,7 @@ Usage:
     quick-notes --show      bring all notes to the front
     quick-notes --quit      close the app (notes are kept)
     quick-notes --shortcut  print the keyboard shortcut in use
+    quick-notes --search    open the note search (Ctrl+Alt+F)
 
 Inside a note:
     Enter finishes the note (double-click to edit again), Shift+Enter new line
@@ -20,12 +21,15 @@ Use shortcut=none to turn the built-in shortcut off (e.g. when you set one up in
 the Keyboard settings with the command: quick-notes --new).
 """
 
+import base64
 import ctypes
 import ctypes.util
+import datetime
 import json
 import os
 import sys
 import time
+import unicodedata
 import uuid
 
 import gi
@@ -33,6 +37,13 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+
+try:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+except ImportError:          # locked notes need python3-cryptography
+    AESGCM = Scrypt = InvalidTag = None
 
 try:
     gi.require_version("GdkX11", "3.0")
@@ -46,6 +57,9 @@ SETTINGS_FILE = os.path.join(GLib.get_user_config_dir(), "quick-notes", "setting
 ACTIVE_SHORTCUT_FILE = os.path.join(GLib.get_user_config_dir(), "quick-notes", "active-shortcut")
 # Tried in order; the first one no other program is using wins.
 DEFAULT_SHORTCUTS = ["<Primary><Alt>n", "<Super>n", "<Primary><Alt>j", "<Primary><Super>n"]
+DEFAULT_SEARCH_SHORTCUTS = ["<Primary><Alt>f", "<Super>f", "<Primary><Alt>k"]
+ACTIVE_SEARCH_FILE = os.path.join(GLib.get_user_config_dir(), "quick-notes", "active-search-shortcut")
+LOCK_MINUTES = 5          # locked notes lock themselves again after this long without use
 DOUBLE_CLICK = getattr(Gdk.EventType, "DOUBLE_BUTTON_PRESS", None) or getattr(Gdk.EventType, "_2BUTTON_PRESS")
 LOCK_SCHEMA = "org.cinnamon.desktop.screensaver"
 LOCK_KEY = "default-message"
@@ -88,12 +102,19 @@ window.note { background-color: transparent; }
 .note button:checked { background-color: rgba(0,0,0,0.17); }
 .note .grip { color: rgba(0,0,0,0.35); padding: 0 3px; }
 .swatch { min-width: 16px; min-height: 16px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.3); }
+.note .locked-title { font-weight: bold; color: #3a3a3a; }
+.note .locked-dots { color: rgba(0,0,0,0.35); font-size: 16pt; }
+.search-meta { font-size: small; opacity: 0.7; }
+.search-chip { background-color: #6b4fbb; color: #ffffff; border-radius: 4px; padding: 0 5px;
+               font-size: x-small; font-weight: bold; }
+.search-danger { color: #d83b3b; font-weight: bold; }
 """
     for name, (body, header) in COLORS.items():
         css += f"""
 .note-{name} .note-frame {{ background-color: {body}; }}
 .note-{name} .note-header {{ background-color: {header}; }}
 .swatch-{name} {{ background-color: {body}; }}
+.stripe-{name} {{ background-color: {header}; min-width: 6px; border-radius: 3px; }}
 """
     return css.encode()
 
@@ -257,6 +278,186 @@ def pretty_accel(accel):
 
 
 # --------------------------------------------------------------------------
+# locked notes: AES-256-GCM, key from the master password with scrypt
+# --------------------------------------------------------------------------
+
+def _b64(raw):
+    return base64.b64encode(raw).decode()
+
+
+def _unb64(text):
+    return base64.b64decode(text.encode())
+
+
+class Vault:
+    """Encrypts locked notes. Only the scrambled text is ever written to disk."""
+
+    CHECK = b"quick-notes vault v1"
+
+    def __init__(self, data):
+        self.data = dict(data) if data else None
+        self.key = None
+        self.until = 0.0
+
+    @property
+    def available(self):
+        return AESGCM is not None
+
+    @property
+    def configured(self):
+        return bool(self.data)
+
+    @property
+    def unlocked(self):
+        return self.key is not None
+
+    @staticmethod
+    def _derive(password, salt):
+        return Scrypt(salt=salt, length=32, n=2 ** 15, r=8, p=1).derive(password.encode("utf-8"))
+
+    def _seal(self, raw):
+        nonce = os.urandom(12)
+        return _b64(nonce + AESGCM(self.key).encrypt(nonce, raw, None))
+
+    def _open(self, blob, key=None):
+        raw = _unb64(blob)
+        return AESGCM(key or self.key).decrypt(raw[:12], raw[12:], None)
+
+    def create(self, password):
+        salt = os.urandom(16)
+        self.key = self._derive(password, salt)
+        self.data = {"version": 1, "kdf": "scrypt", "salt": _b64(salt), "check": self._seal(self.CHECK)}
+        self.touch()
+
+    def unlock(self, password):
+        key = self._derive(password, _unb64(self.data["salt"]))
+        try:
+            ok = self._open(self.data["check"], key) == self.CHECK
+        except InvalidTag:
+            ok = False
+        if ok:
+            self.key = key
+            self.touch()
+        return ok
+
+    def lock(self):
+        self.key = None
+
+    def touch(self):
+        self.until = time.monotonic() + LOCK_MINUTES * 60
+
+    def encrypt(self, obj):
+        return self._seal(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+    def decrypt(self, blob):
+        return json.loads(self._open(blob).decode("utf-8"))
+
+
+def fold(text):
+    """Lowercase without accents ("Cím" -> "cim"), plus a map back to the original positions."""
+    out, positions = [], []
+    for i, char in enumerate(text):
+        plain = "".join(c for c in unicodedata.normalize("NFD", char.lower())
+                        if not unicodedata.combining(c))
+        for c in plain:
+            out.append(c)
+            positions.append(i)
+    return "".join(out), positions
+
+
+def runs_text(runs):
+    return "".join(str(r[0]) for r in runs or [] if r)
+
+
+def highlight(text, terms, limit=600):
+    """Markup for a search result: matches highlighted, long notes cut around the first match."""
+    folded, positions = fold(text)
+    marks = [False] * len(text)
+    first = None
+    for term in terms:
+        start = 0
+        while term:
+            found = folded.find(term, start)
+            if found < 0:
+                break
+            begin, end = positions[found], positions[found + len(term) - 1]
+            first = begin if first is None else min(first, begin)
+            for k in range(begin, end + 1):
+                marks[k] = True
+            start = found + 1
+    lo = 0
+    if first is not None and first > limit // 2:
+        lo = max(0, first - 120)
+    hi = min(len(text), lo + limit)
+    out = ["\u2026"] if lo else []
+    esc = GLib.markup_escape_text
+    k = lo
+    while k < hi:
+        j = k
+        while j < hi and marks[j] == marks[k]:
+            j += 1
+        chunk = esc(text[k:j])
+        out.append(f"<span background='#ffe36e' foreground='#000000'><b>{chunk}</b></span>" if marks[k] else chunk)
+        k = j
+    if hi < len(text):
+        out.append("\u2026")
+    return "".join(out)
+
+
+def ask_password(parent, create=False, check=None):
+    """Master password dialog. Returns the password or None."""
+    dialog = Gtk.Dialog(title="Create a master password" if create else "Unlock locked notes",
+                        transient_for=parent, modal=True)
+    dialog.set_keep_above(True)
+    dialog.set_default_size(380, -1)
+    area = dialog.get_content_area()
+    area.set_border_width(14)
+    area.set_spacing(8)
+    text = Gtk.Label(xalign=0)
+    text.set_line_wrap(True)
+    text.set_max_width_chars(46)
+    if create:
+        text.set_markup("Locked notes are encrypted with this password.\n"
+                        "<b>If you forget it, locked notes cannot be recovered.</b>")
+    else:
+        text.set_text("Type your master password:")
+    area.pack_start(text, False, False, 0)
+    first = Gtk.Entry(visibility=False, activates_default=True)
+    first.set_placeholder_text("Master password")
+    area.pack_start(first, False, False, 0)
+    second = None
+    if create:
+        second = Gtk.Entry(visibility=False, activates_default=True)
+        second.set_placeholder_text("Type it again")
+        area.pack_start(second, False, False, 0)
+    error = Gtk.Label(xalign=0)
+    error.get_style_context().add_class("search-danger")
+    area.pack_start(error, False, False, 0)
+    dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+    ok = dialog.add_button("Create" if create else "Unlock", Gtk.ResponseType.OK)
+    ok.set_can_default(True)
+    ok.grab_default()
+    dialog.show_all()
+    result = None
+    while dialog.run() == Gtk.ResponseType.OK:
+        password = first.get_text()
+        if create and len(password) < 4:
+            error.set_text("Use at least 4 characters.")
+            continue
+        if create and password != second.get_text():
+            error.set_text("The two passwords are different.")
+            continue
+        if not create and check is not None and not check(password):
+            error.set_text("Wrong password.")
+            first.set_text("")
+            continue
+        result = password
+        break
+    dialog.destroy()
+    return result
+
+
+# --------------------------------------------------------------------------
 # one note
 # --------------------------------------------------------------------------
 
@@ -268,6 +469,10 @@ class Note(Gtk.Window):
         self.color = data.get("color") if data.get("color") in COLORS else DEFAULT_COLOR
         self.lock = bool(data.get("lock"))
         self.finished = bool(data.get("finished"))
+        self.created = data.get("created") or time.time()
+        self.secret = bool(data.get("secret"))       # locked with the master password
+        self.enc = data.get("enc")                    # encrypted content of a locked note
+        self.revealed = not self.secret
         self.typing_bold = False
         self.typing_italic = False
         self.internal = False     # True while we change the text ourselves
@@ -291,7 +496,13 @@ class Note(Gtk.Window):
         self.get_style_context().add_class(f"note-{self.color}")
 
         self._build_ui()
-        self._load_runs(data.get("runs") or [])
+        if self.secret:
+            if self.app.vault.unlocked:
+                self.reveal()
+            else:
+                self._apply_finished()
+        else:
+            self._load_runs(data.get("runs") or [])
 
         self.connect("configure-event", lambda *_: self.app.save_soon())
         self.connect("delete-event", self._on_delete_event)
@@ -319,15 +530,28 @@ class Note(Gtk.Window):
             b, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None))
         header.pack_start(self.color_button, False, False, 0)
 
+        search_button = flat_button("S", ("system-search-symbolic", "edit-find-symbolic"),
+                                    "Search all notes (Ctrl+Alt+F)")
+        search_button.connect("clicked", lambda *_: self.app.show_search())
+        header.pack_start(search_button, False, False, 0)
+
         header.pack_start(Gtk.Box(), True, True, 0)   # spacer - drag here to move
 
-        self.lock_button = flat_button("L", ("changes-prevent-symbolic", "system-lock-screen-symbolic"),
+        self.lock_button = flat_button("LS", ("video-display-symbolic", "preferences-desktop-screensaver-symbolic"),
                                        "Show this note on the lock screen", toggle=True)
-        self.lock_button.set_active(self.lock)
+        self.lock_button.set_active(self.lock and not self.secret)
+        self.lock_button.set_sensitive(not self.secret)
         self.lock_button.connect("toggled", self._on_lock_toggled)
         header.pack_start(self.lock_button, False, False, 0)
 
-        delete_button = flat_button("✕", ("window-close-symbolic",), "Delete note")
+        self.secret_button = flat_button("P", ("changes-prevent-symbolic", "system-lock-screen-symbolic"),
+                                         "Lock this note with your master password (encrypted)", toggle=True)
+        self.secret_button.set_active(self.secret)
+        self.secret_id = self.secret_button.connect("toggled", self._on_secret_toggled)
+        header.pack_start(self.secret_button, False, False, 0)
+
+        delete_button = flat_button("✕", ("window-close-symbolic",),
+                                    "Archive note (find it again with Ctrl+Alt+F)")
         delete_button.connect("clicked", lambda *_: self.app.delete_note(self))
         header.pack_start(delete_button, False, False, 0)
 
@@ -350,7 +574,23 @@ class Note(Gtk.Window):
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.add(self.view)
-        frame.pack_start(scroller, True, True, 0)
+        self.body = Gtk.Stack()
+        scroller.show_all()      # a Stack only switches to pages that are already visible
+        self.body.add_named(scroller, "text")
+        locked = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
+        title = Gtk.Label(label="Locked note")
+        title.get_style_context().add_class("locked-title")
+        dots = Gtk.Label(label="\u2022 \u2022 \u2022 \u2022 \u2022 \u2022")
+        dots.get_style_context().add_class("locked-dots")
+        unlock = Gtk.Button(label="Unlock")
+        unlock.set_halign(Gtk.Align.CENTER)
+        unlock.set_can_focus(False)
+        unlock.connect("clicked", lambda *_: self.app.unlock_vault(parent=self))
+        for widget in (title, dots, unlock):
+            locked.pack_start(widget, False, False, 0)
+        locked.show_all()
+        self.body.add_named(locked, "locked")
+        frame.pack_start(self.body, True, True, 0)
 
         # Footer: formatting + resize grip
         footer = Gtk.Box(spacing=0)
@@ -385,7 +625,8 @@ class Note(Gtk.Window):
         footer.pack_end(grip, False, False, 0)
 
         # Everything except the x disappears while the note is finished.
-        self.edit_widgets = [new_button, self.color_button, self.lock_button, self.tools, grip]
+        self.edit_widgets = [new_button, self.color_button, search_button, self.lock_button,
+                             self.secret_button, self.tools, grip]
         for widget in self.edit_widgets:
             widget.show_all()
             widget.set_no_show_all(True)
@@ -426,9 +667,17 @@ class Note(Gtk.Window):
     def to_dict(self):
         x, y = self.get_position()
         w, h = self.get_size()
-        return {"id": self.id, "x": x, "y": y, "w": w, "h": h,
-                "color": self.color, "lock": self.lock, "finished": self.finished,
-                "runs": self._runs()}
+        data = {"id": self.id, "x": x, "y": y, "w": w, "h": h, "color": self.color,
+                "lock": self.lock and not self.secret, "finished": self.finished,
+                "created": self.created, "secret": self.secret}
+        if self.secret:
+            # Only the encrypted text is ever saved for a locked note.
+            if self.revealed and self.app.vault.unlocked:
+                self.enc = self.app.vault.encrypt(self._runs())
+            data["enc"] = self.enc
+        else:
+            data["runs"] = self._runs()
+        return data
 
     def _runs(self):
         runs = []
@@ -462,7 +711,50 @@ class Note(Gtk.Window):
         self.buffer.place_cursor(self.buffer.get_end_iter())
 
     def plain_text(self):
+        if not self.revealed:
+            return ""
         return self.buffer.get_text(self.buffer.get_start_iter(), self.buffer.get_end_iter(), False)
+
+    # ---------------------------------------------------------------- locked notes
+    def reveal(self):
+        """Show a locked note's text (the vault must be unlocked)."""
+        runs = self.app.vault.decrypt(self.enc) if self.enc else []
+        self.internal = True
+        self.buffer.set_text("")
+        self.internal = False
+        self._load_runs(runs)
+        self.revealed = True
+        self._apply_finished()
+
+    def conceal(self):
+        """Encrypt the text, wipe it from the window and show the locked page."""
+        if self.revealed and self.app.vault.unlocked:
+            self.enc = self.app.vault.encrypt(self._runs())
+        self.internal = True
+        self.buffer.set_text("")
+        self.internal = False
+        self.revealed = False
+        self._apply_finished()
+
+    def _on_secret_toggled(self, button):
+        want = button.get_active()
+        if want == self.secret:
+            return
+        if want and not self.app.ensure_vault(parent=self):
+            self.secret_button.handler_block(self.secret_id)
+            self.secret_button.set_active(False)
+            self.secret_button.handler_unblock(self.secret_id)
+            return
+        self.secret = want
+        if want:
+            self.enc = self.app.vault.encrypt(self._runs())
+            if self.lock:
+                self.lock_button.set_active(False)     # a locked note never goes on the lock screen
+        else:
+            self.enc = None
+        self.lock_button.set_sensitive(not want)
+        self.app.save_soon()
+        self.app.refresh_search()
 
     # ---------------------------------------------------------------- text behaviour
     def _on_insert_text(self, buffer, location, text, _length):
@@ -476,6 +768,8 @@ class Note(Gtk.Window):
             buffer.apply_tag(self.tag_italic, start, location)
 
     def _on_changed(self, _buffer):
+        if self.secret and self.revealed and not self.internal:
+            self.app.vault.touch()      # typing keeps it unlocked
         self._refresh_done_tags()
         self.app.save_soon()
         if self.lock:
@@ -569,11 +863,13 @@ class Note(Gtk.Window):
 
     # ---------------------------------------------------------------- finished (read-only) notes
     def _apply_finished(self):
+        hidden = self.finished or not self.revealed
         self.view.set_editable(not self.finished)
         self.view.set_cursor_visible(not self.finished)
         for widget in self.edit_widgets:
-            widget.set_visible(not self.finished)
+            widget.set_visible(not hidden)
         self.view.set_tooltip_text("Double-click to edit" if self.finished else None)
+        self.body.set_visible_child_name("text" if self.revealed else "locked")
 
     def set_finished(self, finished):
         self.finished = finished
@@ -700,6 +996,206 @@ class Note(Gtk.Window):
 
 
 # --------------------------------------------------------------------------
+# search window: every note, on screen and archived
+# --------------------------------------------------------------------------
+
+class SearchWindow(Gtk.Window):
+    def __init__(self, app):
+        super().__init__(title="Search notes")
+        self.app = app
+        self.set_default_size(540, 640)
+        self.set_keep_above(True)
+        self.set_icon_name("edit-find")
+        self.connect("delete-event", lambda *_: self.hide() or True)
+        self.connect("key-press-event", self._on_key)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(10)
+        self.add(box)
+        top = Gtk.Box(spacing=6)
+        self.entry = Gtk.SearchEntry()
+        self.entry.set_placeholder_text("Search your notes (e.g. wifi, Marci, +36)")
+        self.entry.connect("search-changed", lambda *_: self.refresh())
+        top.pack_start(self.entry, True, True, 0)
+        self.vault_button = Gtk.Button()
+        self.vault_button.connect("clicked", self._on_vault_button)
+        top.pack_start(self.vault_button, False, False, 0)
+        box.pack_start(top, False, False, 0)
+        self.status = Gtk.Label(xalign=0)
+        self.status.get_style_context().add_class("search-meta")
+        box.pack_start(self.status, False, False, 0)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        placeholder = Gtk.Label(label="No notes found")
+        placeholder.get_style_context().add_class("search-meta")
+        placeholder.set_margin_top(30)
+        placeholder.show()
+        self.listbox.set_placeholder(placeholder)
+        scroller.add(self.listbox)
+        box.pack_start(scroller, True, True, 0)
+
+    def open(self):
+        self.refresh()
+        self.show_all()
+        self.present()
+        self.entry.grab_focus()
+
+    def _on_key(self, _widget, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.hide()
+            return True
+        return False
+
+    def _on_vault_button(self, *_):
+        if self.app.vault.unlocked:
+            self.app.lock_vault()
+        else:
+            self.app.unlock_vault(parent=self)
+
+    def flash(self, text):
+        self.status.set_text(text)
+        GLib.timeout_add_seconds(3, lambda: self.status.set_text("") or False)
+
+    def _items(self):
+        vault = self.app.vault
+        items = []
+        for note in self.app.notes:
+            text = note.plain_text() if note.revealed else None
+            items.append({"where": "screen", "note": note, "id": note.id, "color": note.color,
+                          "time": note.created, "secret": note.secret, "text": text})
+        for entry in self.app.archive:
+            text = None
+            if entry.get("secret"):
+                if vault.unlocked and entry.get("enc"):
+                    try:
+                        text = runs_text(vault.decrypt(entry["enc"]))
+                    except Exception:
+                        text = None
+            else:
+                text = runs_text(entry.get("runs"))
+            items.append({"where": "archive", "entry": entry, "id": entry.get("id"),
+                          "color": entry.get("color", DEFAULT_COLOR),
+                          "time": entry.get("archived") or entry.get("created") or 0,
+                          "secret": bool(entry.get("secret")), "text": text})
+        items.sort(key=lambda i: (i["where"] != "screen", -i["time"]))
+        return items
+
+    def refresh(self):
+        vault = self.app.vault
+        self.vault_button.set_visible(vault.configured)
+        self.vault_button.set_label("Lock now" if vault.unlocked else "Unlock locked notes")
+        query = self.entry.get_text().strip()
+        terms = [t for t in fold(query)[0].split() if t]
+        for child in self.listbox.get_children():
+            self.listbox.remove(child)
+        hidden_locked = 0
+        shown = 0
+        for item in self._items():
+            if item["text"] is None:                 # a locked note while the vault is locked
+                if terms:
+                    hidden_locked += 1
+                    continue
+            elif terms:
+                folded = fold(item["text"])[0]
+                if not all(t in folded for t in terms):
+                    continue
+            self.listbox.add(self._row(item, terms))
+            shown += 1
+        if hidden_locked:
+            self.status.set_text(f"{hidden_locked} locked note(s) not searched - unlock them to include them")
+        elif not terms:
+            self.status.set_text(f"{shown} note(s)")
+        else:
+            self.status.set_text(f"{shown} match(es)")
+        self.listbox.show_all()
+
+    def _row(self, item, terms):
+        row = Gtk.ListBoxRow()
+        outer = Gtk.Box(spacing=8)
+        outer.set_border_width(6)
+        row.add(outer)
+        stripe = Gtk.Box()
+        stripe.get_style_context().add_class(f"stripe-{item['color']}")
+        outer.pack_start(stripe, False, False, 0)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        outer.pack_start(col, True, True, 0)
+
+        meta = Gtk.Box(spacing=6)
+        when = datetime.datetime.fromtimestamp(item["time"]).strftime("%b %d, %Y %H:%M")
+        label = Gtk.Label(label=("On screen \u00b7 created " if item["where"] == "screen" else "Archived ") + when,
+                          xalign=0)
+        label.get_style_context().add_class("search-meta")
+        meta.pack_start(label, False, False, 0)
+        if item["secret"]:
+            chip = Gtk.Label(label="LOCKED")
+            chip.get_style_context().add_class("search-chip")
+            meta.pack_start(chip, False, False, 0)
+        col.pack_start(meta, False, False, 0)
+
+        text = Gtk.Label(xalign=0)
+        text.set_line_wrap(True)
+        text.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        text.set_max_width_chars(52)
+        text.set_selectable(False)
+        if item["text"] is None:
+            text.set_markup("<i>Locked note - unlock to see and search it</i>")
+        else:
+            text.set_markup(highlight(item["text"], terms) or "<i>(empty)</i>")
+        col.pack_start(text, False, False, 0)
+
+        buttons = Gtk.Box(spacing=4)
+        buttons.set_halign(Gtk.Align.END)
+        if item["text"] is None:
+            unlock = Gtk.Button(label="Unlock")
+            unlock.connect("clicked", lambda *_: self.app.unlock_vault(parent=self))
+            buttons.pack_start(unlock, False, False, 0)
+        else:
+            copy = Gtk.Button(label="Copy")
+            copy.set_tooltip_text("Copy the whole note")
+            copy.connect("clicked", lambda *_: self._copy(item["text"]))
+            buttons.pack_start(copy, False, False, 0)
+        if item["where"] == "screen":
+            show = Gtk.Button(label="Show")
+            show.set_tooltip_text("Bring this note to the front")
+            show.connect("clicked", lambda *_: item["note"].present())
+            buttons.pack_start(show, False, False, 0)
+        else:
+            back = Gtk.Button(label="Put back on screen")
+            back.connect("clicked", lambda *_: self.app.restore_note(item["id"]))
+            buttons.pack_start(back, False, False, 0)
+            forever = Gtk.Button(label="Delete forever")
+            forever.connect("clicked", lambda b: self._confirm_delete(b, item["id"]))
+            buttons.pack_start(forever, False, False, 0)
+        col.pack_start(buttons, False, False, 0)
+        return row
+
+    def _copy(self, text):
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        self.flash("Copied to the clipboard")
+
+    def _confirm_delete(self, button, note_id):
+        # First click asks, second click deletes (this one can't be undone).
+        if getattr(button, "armed", False):
+            self.app.delete_forever(note_id)
+            return
+        button.armed = True
+        button.set_label("Really delete? Click again")
+        button.get_style_context().add_class("search-danger")
+
+        def disarm():
+            try:
+                button.armed = False
+                button.set_label("Delete forever")
+                button.get_style_context().remove_class("search-danger")
+            except Exception:
+                pass
+            return False
+        GLib.timeout_add_seconds(4, disarm)
+
+
+# --------------------------------------------------------------------------
 # the application: keeps the notes, saves them, talks to the lock screen
 # --------------------------------------------------------------------------
 
@@ -712,6 +1208,10 @@ class QuickNotesApp(Gtk.Application):
         self._save_id = 0
         self._lock_id = 0
         self.hotkey = None
+        self.search_hotkey = None
+        self.vault = Vault(None)
+        self.archive = []
+        self.search_window = None
 
     # ---------------------------------------------------------------- lifecycle
     def do_startup(self):
@@ -725,6 +1225,8 @@ class QuickNotesApp(Gtk.Application):
         data = self._read()
         self.last_color = data.get("last_color") if data.get("last_color") in COLORS else DEFAULT_COLOR
         self.lock_original = data.get("lock_original")
+        self.vault = Vault(data.get("vault"))
+        self.archive = [a for a in data.get("archive", []) if isinstance(a, dict)]
         for item in data.get("notes", []):
             note = Note(self, item)
             self.notes.append(note)
@@ -746,16 +1248,31 @@ class QuickNotesApp(Gtk.Application):
         except OSError:
             pass
 
+        # second shortcut: the note search
+        self.search_hotkey = GlobalHotkey(self.show_search)
+        wanted = self._configured_shortcut("search_shortcut")
+        if wanted and wanted.lower() in ("none", "off"):
+            found = None
+        else:
+            found = self.search_hotkey.start([wanted] if wanted else DEFAULT_SEARCH_SHORTCUTS)
+        try:
+            with open(ACTIVE_SEARCH_FILE, "w", encoding="utf-8") as f:
+                f.write(pretty_accel(found) if found else "none")
+        except OSError:
+            pass
+        GLib.timeout_add_seconds(5, self._vault_tick)
+
     @staticmethod
-    def _configured_shortcut():
+    def _configured_shortcut(key="shortcut"):
         kf = GLib.KeyFile()
         try:
             kf.load_from_file(SETTINGS_FILE, GLib.KeyFileFlags.NONE)
-            return kf.get_string("quick-notes", "shortcut").strip() or None
+            return kf.get_string("quick-notes", key).strip() or None
         except GLib.Error:
             return None
 
     def do_shutdown(self):
+        self.lock_vault()
         self.save_now()
         Gtk.Application.do_shutdown(self)
 
@@ -766,6 +1283,8 @@ class QuickNotesApp(Gtk.Application):
         elif "--restore" in args:
             pass
 
+        elif "--search" in args:
+            self.show_search()
         elif "--show" in args:
             for note in self.notes:
                 note.present()
@@ -795,13 +1314,111 @@ class QuickNotesApp(Gtk.Application):
         return note
 
     def delete_note(self, note):
+        """The x button: the note leaves the screen but stays searchable in the archive."""
+        entry = note.to_dict()
+        if not entry.get("secret") and not runs_text(entry.get("runs")).strip():
+            entry = None                           # empty notes are simply dropped
         if note in self.notes:
             self.notes.remove(note)
         was_locked = note.lock
         note.destroy()
+        if entry is not None:
+            for key in ("x", "y"):
+                entry.pop(key, None)
+            entry["lock"] = False
+            entry["archived"] = time.time()
+            self.archive.append(entry)
         self.save_soon()
+        self.refresh_search()
         if was_locked:
             self.update_lock_screen_soon()
+
+    def restore_note(self, note_id):
+        entry = next((a for a in self.archive if a.get("id") == note_id), None)
+        if entry is None:
+            return
+        self.archive.remove(entry)
+        display = Gdk.Display.get_default()
+        _screen, px, py = display.get_default_seat().get_pointer().get_position()
+        area = display.get_monitor_at_point(px, py).get_workarea()
+        w, h = entry.get("w") or DEFAULT_SIZE[0], entry.get("h") or DEFAULT_SIZE[1]
+        data = dict(entry, x=min(max(px - w // 2, area.x), area.x + area.width - w),
+                    y=min(max(py - 15, area.y), area.y + area.height - h), finished=True)
+        data.pop("archived", None)
+        note = Note(self, data)
+        self.notes.append(note)
+        note.show_all()
+        note.present()
+        self.save_soon()
+        self.refresh_search()
+
+    def delete_forever(self, note_id):
+        self.archive = [a for a in self.archive if a.get("id") != note_id]
+        self.save_now()
+        self.refresh_search()
+
+    # ---------------------------------------------------------------- search + locked notes
+    def show_search(self):
+        if self.search_window is None:
+            self.search_window = SearchWindow(self)
+        self.search_window.open()
+
+    def refresh_search(self):
+        if self.search_window is not None and self.search_window.get_visible():
+            self.search_window.refresh()
+
+    def ensure_vault(self, parent=None):
+        """Make sure notes can be locked: create the master password or unlock."""
+        if not self.vault.available:
+            dialog = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.ERROR,
+                                       buttons=Gtk.ButtonsType.OK,
+                                       text="Locked notes need the python3-cryptography package.")
+            dialog.format_secondary_text("Install it with:  sudo apt install python3-cryptography")
+            dialog.run()
+            dialog.destroy()
+            return False
+        if self.vault.unlocked:
+            self.vault.touch()
+            return True
+        if not self.vault.configured:
+            password = ask_password(parent, create=True)
+            if password is None:
+                return False
+            self.vault.create(password)
+            self.save_now()
+            return True
+        return self.unlock_vault(parent)
+
+    def unlock_vault(self, parent=None):
+        if not self.vault.configured or not self.vault.available:
+            return False
+        if self.vault.unlocked:
+            return True
+        if ask_password(parent, check=self.vault.unlock) is None:
+            return False
+        for note in self.notes:
+            if note.secret and not note.revealed:
+                try:
+                    note.reveal()
+                except Exception as e:
+                    print(f"quick-notes: could not open a locked note: {e}", file=sys.stderr)
+        self.refresh_search()
+        return True
+
+    def lock_vault(self):
+        if not self.vault.unlocked:
+            return
+        for note in self.notes:
+            if note.secret and note.revealed:
+                note.conceal()
+        self.save_now()
+        self.vault.lock()
+        self.refresh_search()
+
+    def _vault_tick(self):
+        if self.vault.unlocked and time.monotonic() > self.vault.until:
+            self.lock_vault()
+        return True
 
     # ---------------------------------------------------------------- saving
     def _read(self):
@@ -834,12 +1451,14 @@ class QuickNotesApp(Gtk.Application):
         if self._save_id:
             GLib.source_remove(self._save_id)
             self._save_id = 0
-        data = {"version": 1, "last_color": self.last_color, "lock_original": self.lock_original,
-                "notes": [n.to_dict() for n in self.notes]}
+        data = {"version": 2, "last_color": self.last_color, "lock_original": self.lock_original,
+                "notes": [n.to_dict() for n in self.notes], "archive": self.archive,
+                "vault": self.vault.data}
         try:
             os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
             tmp = DATA_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # only you can read it
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=1)
             os.replace(tmp, DATA_FILE)
         except OSError as e:
@@ -866,7 +1485,7 @@ class QuickNotesApp(Gtk.Application):
             return False
         texts = []
         for note in self.notes:
-            if note.lock:
+            if note.lock and not note.secret:
                 lines = [l.strip() for l in note.plain_text().splitlines() if l.strip()]
                 if lines:
                     texts.append("  ·  ".join(lines))
@@ -884,6 +1503,13 @@ class QuickNotesApp(Gtk.Application):
 def main():
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)
+        return 0
+    if "--search-shortcut" in sys.argv:
+        try:
+            with open(ACTIVE_SEARCH_FILE, encoding="utf-8") as f:
+                print(f.read().strip())
+        except OSError:
+            print("none (is Quick Notes running?)")
         return 0
     if "--shortcut" in sys.argv:
         try:

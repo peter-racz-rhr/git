@@ -21,6 +21,11 @@ if ! /usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "3.0"); from gi.r
     say "Installing python3-gi and GTK bindings (needs your password)"
     sudo apt-get install -y python3-gi gir1.2-gtk-3.0
 fi
+# Locked (encrypted) notes need the cryptography library
+if ! /usr/bin/python3 -c 'import cryptography.hazmat.primitives.ciphers.aead' 2>/dev/null; then
+    say "Installing python3-cryptography for locked notes (needs your password)"
+    sudo apt-get install -y python3-cryptography || warn "Could not install it - locked notes won't work until it is installed"
+fi
 
 # 2. Remove any earlier version first (your notes are kept)
 if pgrep -f '^/usr/bin/python3[.0-9]* [^ ]*/quick_notes[.]py' >/dev/null; then
@@ -104,7 +109,7 @@ sleep 2
 
 ACTIVE="$("$BIN" --shortcut)"
 case "$ACTIVE" in
-    none*) if [ "$SHORTCUT" = none ]; then
+    none*) if [ "$SHORTCUT" = none ] || grep -q '^shortcut=none' "$HOME/.config/quick-notes/settings.ini" 2>/dev/null; then
                say "Done! Built-in shortcut is off. Set one in Keyboard > Shortcuts > Custom Shortcuts"
                say "with the command: $BIN --new"
            else
@@ -113,5 +118,10 @@ case "$ACTIVE" in
            fi ;;
     *)     case "$ACTIVE" in *Super*) ACTIVE="$ACTIVE (Super is the Windows key)";; esac
            say "Done! Press $ACTIVE to write a new note." ;;
+esac
+SEARCH="$("$BIN" --search-shortcut)"
+case "$SEARCH" in
+    none*) say "Search your notes with the magnifier button on a note, or: $BIN --search" ;;
+    *)     say "Press $SEARCH to search all your notes (or: $BIN --search)" ;;
 esac
 say "You can also open it from the menu: Quick Notes"
