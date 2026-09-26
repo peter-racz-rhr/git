@@ -21,12 +21,19 @@ computer. Running it again updates it.
 2. Drag a box around the text (or QR code). **Esc** or right-click cancels.
 3. The text is **in your clipboard** - paste it anywhere with Ctrl+V.
 
-A small popup shows the first lines. Click it (or **Show all**) for the full text:
+A small popup (same look as Drop Shelf) appears in the bottom-right corner. The first
+lines fade out into the background, like the queue in Now Playing. It fades away after
+10 seconds, or stays while your mouse is on it. Click the text (or **Show all**) for the full text.
 
-- edit it, **Copy** it again, or send it **To Quick Notes**
-- **Reading order** (normal text, columns are read one after the other) or **Keep rows**
-  (tables and lists: rows and spacing stay as on screen) - it reads the picture again
-- **Grab again**
+| Button | What it does |
+|---|---|
+| note icon | put the text on a Quick Notes post-it |
+| dotted box | grab again |
+| copy icon (big window) | copy the text again, with your edits |
+| menu (big window) | **Reading order** (normal text, columns one after the other) or **Keep rows** (tables and lists keep their spacing) - it reads the picture again; open the picture |
+| header | drag it to move the window |
+| ◢ corner | resize the big window |
+| Esc / x | close |
 
 **QR codes**: grab one and its content (usually a link) is copied; **Open** opens the link.
 

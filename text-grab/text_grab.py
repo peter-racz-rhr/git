@@ -50,18 +50,25 @@ QUICK_NOTES = os.path.expanduser("~/.local/bin/quick-notes")
 POPUP_SECONDS = 10
 
 CSS = b"""
-window.tg-popup { background-color: transparent; }
-.tg-frame {
+window.tg-window.transparent { background-color: transparent; }
+.shelf {
     background-color: @theme_bg_color;
-    border: 1px solid alpha(@theme_fg_color, 0.2);
+    border: 2px solid alpha(@theme_fg_color, 0.18);
     border-radius: 10px;
 }
-.tg-title { font-weight: bold; }
-.tg-ok { color: #2e9d57; font-weight: bold; }
-.tg-dim { opacity: 0.65; font-size: small; }
-.tg-qr { background-color: alpha(@theme_selected_bg_color, 0.15); border-radius: 6px; padding: 6px; }
-.tg-preview { font-family: monospace; }
-.tg-frame button { padding: 2px 8px; min-height: 0; }
+.shelf-header { padding: 4px 4px 2px 10px; }
+.shelf-title { font-weight: bold; }
+.shelf-footer { padding: 2px 6px 4px 6px; }
+.shelf-status { opacity: 0.7; font-size: small; }
+.shelf-status.tg-ok { opacity: 1; color: #2e9d57; }
+.tg-body { padding: 2px 10px 4px 10px; }
+.tg-qr {
+    background-color: alpha(@theme_selected_bg_color, 0.15);
+    border-radius: 6px;
+    padding: 0 0 0 8px;
+}
+.tg-text { border-radius: 6px; background-color: alpha(@theme_fg_color, 0.05); }
+.tg-text textview, .tg-text textview text { background-color: transparent; }
 """
 
 
@@ -438,139 +445,250 @@ class Selector(Gtk.Window):
 
 
 # --------------------------------------------------------------------------
+# shared look (the same as Drop Shelf)
+# --------------------------------------------------------------------------
+
+def icon_button(icon_names, fallback_label, tooltip):
+    button = Gtk.Button()
+    theme = Gtk.IconTheme.get_default()
+    for name in icon_names:
+        if theme.has_icon(name):
+            button.set_image(Gtk.Image.new_from_icon_name(name, Gtk.IconSize.MENU))
+            break
+    else:
+        button.set_label(fallback_label)
+    button.set_relief(Gtk.ReliefStyle.NONE)
+    button.set_tooltip_text(tooltip)
+    button.set_can_focus(False)
+    return button
+
+
+ICON_NOTE = ["accessories-text-editor-symbolic", "text-editor-symbolic", "document-new-symbolic"]
+ICON_GRAB = ["zoom-select-symbolic", "edit-select-all-symbolic", "view-refresh-symbolic"]
+ICON_COPY = ["edit-copy-symbolic", "edit-copy"]
+ICON_CLOSE = ["window-close-symbolic", "window-close"]
+ICON_OPEN = ["web-browser-symbolic", "external-link-symbolic", "document-open-symbolic"]
+
+
+class ShelfWindow(Gtk.Window):
+    """An undecorated window with the Drop Shelf frame: bold title and flat icons on
+    top (drag the top to move it), content, and a small footer."""
+
+    def __init__(self, title):
+        super().__init__(title=title)
+        self.set_decorated(False)
+        self.set_keep_above(True)
+        self.set_skip_pager_hint(True)
+        self.set_icon_name("edit-select-all")
+        self.get_style_context().add_class("tg-window")
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None and screen.is_composited():
+            self.set_visual(visual)
+            self.get_style_context().add_class("transparent")
+
+        self.frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.frame.get_style_context().add_class("shelf")
+        self.add(self.frame)
+
+        header_events = Gtk.EventBox()
+        header_events.connect("button-press-event", self._on_header_press)
+        self.header = Gtk.Box(spacing=2)
+        self.header.get_style_context().add_class("shelf-header")
+        header_events.add(self.header)
+        self.frame.pack_start(header_events, False, False, 0)
+        title_label = Gtk.Label(label=title, xalign=0)
+        title_label.get_style_context().add_class("shelf-title")
+        self.header.pack_start(title_label, True, True, 0)
+
+        self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.body.get_style_context().add_class("tg-body")
+        self.frame.pack_start(self.body, True, True, 0)
+
+        self.footer = Gtk.Box(spacing=4)
+        self.footer.get_style_context().add_class("shelf-footer")
+        self.frame.pack_start(self.footer, False, False, 0)
+        self.status = Gtk.Label(xalign=0)
+        self.status.get_style_context().add_class("shelf-status")
+        self.status.set_ellipsize(Pango.EllipsizeMode.END)
+
+    def add_header_button(self, button):
+        self.header.pack_start(button, False, False, 0)
+        return button
+
+    def _on_header_press(self, _widget, event):
+        if event.button == 1:
+            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
+        return False
+
+
+def qr_row(app, code, with_copy=False):
+    row = Gtk.Box(spacing=2)
+    row.get_style_context().add_class("tg-qr")
+    label = Gtk.Label(xalign=0)
+    label.set_markup(f"<small><b>QR</b></small>  {GLib.markup_escape_text(code)}")
+    label.set_ellipsize(Pango.EllipsizeMode.END)
+    label.set_tooltip_text(code)
+    row.pack_start(label, True, True, 0)
+    if with_copy:
+        copy = icon_button(ICON_COPY, "Copy", "Copy")
+        copy.connect("clicked", lambda *_: app.copy(code))
+        row.pack_start(copy, False, False, 0)
+    if re.match(r"^(https?://|www\.)", code, re.I):
+        open_button = icon_button(ICON_OPEN, "Open", "Open in the browser")
+        open_button.connect("clicked", lambda *_: app.open_link(code))
+        row.pack_start(open_button, False, False, 0)
+    return row
+
+
+# --------------------------------------------------------------------------
 # the small popup: first lines, fading out; click for everything
 # --------------------------------------------------------------------------
 
-class Popup(Gtk.Window):
-    WIDTH = 380
+class FadingText(Gtk.DrawingArea):
+    """The start of the text. The lower lines dissolve into the background, the
+    same way the queue does in Now Playing."""
+
+    MAX_HEIGHT = 124
+    FADE = 70
+
+    def __init__(self, text, width, monospace):
+        super().__init__()
+        lines = re.sub(r"\n\s*\n+", "\n\n", text.strip()).splitlines()[:14]
+        self.layout = self.create_pango_layout("\n".join(lines))
+        if monospace:
+            self.layout.set_font_description(Pango.FontDescription("Monospace 9"))
+            self.layout.set_ellipsize(Pango.EllipsizeMode.END)   # keep table rows on one line
+        else:
+            self.layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        self.layout.set_width(width * Pango.SCALE)
+        text_height = self.layout.get_pixel_size()[1]
+        self.fades = text_height > self.MAX_HEIGHT
+        self.set_size_request(width, min(text_height, self.MAX_HEIGHT))
+        self.connect("draw", self._draw)
+
+    def _draw(self, widget, cr):
+        ctx = widget.get_style_context()
+        fg = ctx.get_color(ctx.get_state())
+        cr.set_source_rgba(fg.red, fg.green, fg.blue, fg.alpha)
+        PangoCairo.show_layout(cr, self.layout)
+        if self.fades:
+            found, bg = ctx.lookup_color("theme_bg_color")
+            rgb = (bg.red, bg.green, bg.blue) if found else (1, 1, 1)
+            h = widget.get_allocated_height()
+            top = h - self.FADE
+            gradient = cairo.LinearGradient(0, top, 0, h)
+            gradient.add_color_stop_rgba(0, *rgb, 0)
+            gradient.add_color_stop_rgba(0.75, *rgb, 0.92)
+            gradient.add_color_stop_rgba(1, *rgb, 1)
+            cr.rectangle(0, top, widget.get_allocated_width(), self.FADE)
+            cr.set_source(gradient)
+            cr.fill()
+        return False
+
+
+class Popup(ShelfWindow):
+    WIDTH = 360
 
     def __init__(self, app, grab):
-        super().__init__()
+        super().__init__("Text Grab")
         self.app = app
         self.grab = grab
         self.hovered = False
-        self.set_decorated(False)
-        self.set_keep_above(True)
+        self.closing = False
         self.set_skip_taskbar_hint(True)
-        self.set_skip_pager_hint(True)
         self.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
         self.set_accept_focus(False)
-        self.get_style_context().add_class("tg-popup")
-        screen = self.get_screen()
-        if screen.get_rgba_visual() is not None and screen.is_composited():
-            self.set_visual(screen.get_rgba_visual())
+        self.set_default_size(self.WIDTH, -1)
+        self.connect("enter-notify-event", lambda *_: self._hover(True))
+        self.connect("leave-notify-event", self._on_leave)
 
-        events = Gtk.EventBox()
-        events.connect("enter-notify-event", lambda *_: setattr(self, "hovered", True))
-        events.connect("leave-notify-event", lambda *_: setattr(self, "hovered", False))
-        self.add(events)
-        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        frame.set_border_width(10)
-        frame.get_style_context().add_class("tg-frame")
-        events.add(frame)
-
-        top = Gtk.Box(spacing=6)
-        if grab.text:
-            status = Gtk.Label(label="✓ Text copied", xalign=0)
-            status.get_style_context().add_class("tg-ok")
-        elif grab.qr:
-            status = Gtk.Label(label="✓ QR code copied", xalign=0)
-            status.get_style_context().add_class("tg-ok")
-        else:
-            status = Gtk.Label(label="No text found" if not grab.error else "Could not read the text", xalign=0)
-            status.get_style_context().add_class("tg-title")
-        top.pack_start(status, True, True, 0)
-        close = Gtk.Button(label="✕")
-        close.set_relief(Gtk.ReliefStyle.NONE)
+        if grab.text and os.path.exists(QUICK_NOTES):
+            note = self.add_header_button(icon_button(ICON_NOTE, "Note", "Put the text on a Quick Notes post-it"))
+            note.connect("clicked", lambda *_: (self.app.to_quick_notes(grab.text), self.destroy()))
+        again = self.add_header_button(icon_button(ICON_GRAB, "Again", "Grab again"))
+        again.connect("clicked", lambda *_: (self.destroy(), self.app.start_grab()))
+        close = self.add_header_button(icon_button(ICON_CLOSE, "✕", "Close"))
         close.connect("clicked", lambda *_: self.destroy())
-        top.pack_start(close, False, False, 0)
-        frame.pack_start(top, False, False, 0)
 
         for code in grab.qr[:2]:
-            qr = Gtk.Box(spacing=6)
-            qr.get_style_context().add_class("tg-qr")
-            label = Gtk.Label(label=f"QR: {code}", xalign=0)
-            label.set_ellipsize(Pango.EllipsizeMode.END)
-            label.set_max_width_chars(34)
-            qr.pack_start(label, True, True, 0)
-            if re.match(r"^(https?://|www\.)", code, re.I):
-                open_button = Gtk.Button(label="Open")
-                open_button.connect("clicked", lambda _b, c=code: self.app.open_link(c))
-                qr.pack_start(open_button, False, False, 0)
-            frame.pack_start(qr, False, False, 0)
+            self.body.pack_start(qr_row(app, code), False, False, 0)
 
         if grab.text:
-            # the first lines, fading out at the bottom
-            preview_lines = grab.text.splitlines()[:4]
-            overlay = Gtk.Overlay()
-            label = Gtk.Label(label="\n".join(preview_lines), xalign=0, yalign=0)
-            label.get_style_context().add_class("tg-preview")
-            label.set_ellipsize(Pango.EllipsizeMode.END)
-            label.set_max_width_chars(44)
-            label.set_size_request(self.WIDTH - 22, -1)
-            overlay.add(label)
-            if len(grab.text.splitlines()) > 3:
-                fade = Gtk.DrawingArea()
-                fade.set_valign(Gtk.Align.END)
-                fade.set_size_request(-1, 26)
-                fade.connect("draw", self._draw_fade)
-                overlay.add_overlay(fade)
-                overlay.set_overlay_pass_through(fade, True)
+            text = FadingText(grab.text, self.WIDTH - 24, grab.layout == "table")
             click = Gtk.EventBox()
-            click.add(overlay)
+            click.add(text)
             click.set_tooltip_text("Click to see all of it")
             click.connect("button-press-event", lambda *_: self._show_all())
-            frame.pack_start(click, False, False, 0)
-            lines = len(grab.text.splitlines())
-            info = Gtk.Label(label=f"{lines} line{'s' if lines != 1 else ''} · {len(grab.text)} characters",
-                             xalign=0)
-            info.get_style_context().add_class("tg-dim")
-            frame.pack_start(info, False, False, 0)
-        elif grab.error:
-            err = Gtk.Label(label=grab.error, xalign=0)
-            err.set_line_wrap(True)
-            err.get_style_context().add_class("tg-dim")
-            frame.pack_start(err, False, False, 0)
+            click.connect("realize", lambda w: w.get_window().set_cursor(
+                Gdk.Cursor.new_from_name(w.get_display(), "pointer")))
+            self.body.pack_start(click, False, False, 0)
+        elif not grab.qr:
+            empty = Gtk.Label(xalign=0)
+            empty.set_line_wrap(True)
+            empty.set_max_width_chars(40)
+            empty.set_markup("<b>No text found</b>\n<small>Try a bigger box, or zoom in first.</small>"
+                             if not grab.error else
+                             f"<b>Could not read the text</b>\n<small>{GLib.markup_escape_text(grab.error)}</small>")
+            self.body.pack_start(empty, False, False, 0)
 
-        buttons = Gtk.Box(spacing=4)
         if grab.text:
-            all_button = Gtk.Button(label="Show all")
-            all_button.connect("clicked", lambda *_: self._show_all())
-            buttons.pack_start(all_button, False, False, 0)
-            if os.path.exists(QUICK_NOTES):
-                note_button = Gtk.Button(label="To Quick Notes")
-                note_button.connect("clicked", lambda *_: (self.app.to_quick_notes(grab.text), self.destroy()))
-                buttons.pack_start(note_button, False, False, 0)
-        again = Gtk.Button(label="Grab again")
-        again.connect("clicked", lambda *_: (self.destroy(), self.app.start_grab()))
-        buttons.pack_start(again, False, False, 0)
-        frame.pack_start(buttons, False, False, 0)
+            show_all = Gtk.Button(label="Show all")
+            show_all.set_can_focus(False)
+            show_all.connect("clicked", lambda *_: self._show_all())
+            self.footer.pack_start(show_all, False, False, 0)
+            lines = len(grab.text.splitlines())
+            self.status.set_text(f"✓ Copied · {lines} line{'s' if lines != 1 else ''} · "
+                                 f"{len(grab.text)} characters")
+        elif grab.qr:
+            self.status.set_text("✓ QR code copied")
+        if self.status.get_text():
+            self.status.get_style_context().add_class("tg-ok")
+        self.footer.pack_start(self.status, True, True, 0)
 
-        self.set_default_size(self.WIDTH, -1)
         self._place()
+        Gtk.Widget.set_opacity(self, 0)
+        self._fade_to(1)
         GLib.timeout_add_seconds(POPUP_SECONDS, self._auto_close)
 
     def _place(self):
         display = Gdk.Display.get_default()
         _screen, px, py = display.get_default_seat().get_pointer().get_position()
         area = display.get_monitor_at_point(px, py).get_workarea()
-        self.move(area.x + area.width - self.WIDTH - 16, area.y + area.height - 260)
+        self.frame.show_all()
+        _minimum, natural = self.frame.get_preferred_size()
+        self.move(area.x + area.width - self.WIDTH - 16, area.y + area.height - natural.height - 16)
 
-    def _draw_fade(self, widget, cr):
-        h = widget.get_allocated_height()
-        bg = self.get_style_context().lookup_color("theme_bg_color")
-        color = bg[1] if bg[0] else Gdk.RGBA(1, 1, 1, 1)
-        gradient = cairo.LinearGradient(0, 0, 0, h)
-        gradient.add_color_stop_rgba(0, color.red, color.green, color.blue, 0)
-        gradient.add_color_stop_rgba(1, color.red, color.green, color.blue, 1)
-        cr.set_source(gradient)
-        cr.paint()
-        return False
+    def _hover(self, on):
+        self.hovered = on
+        if on and self.closing:            # mouse came back while fading out: stay
+            self.closing = False
+            self._fade_to(1)
+
+    def _on_leave(self, _w, event):
+        if event.detail != Gdk.NotifyType.INFERIOR:    # not just moving onto a button
+            self._hover(False)
+
+    def _fade_to(self, target, then=None):
+        step = 0.08 if target > Gtk.Widget.get_opacity(self) else -0.05
+
+        def tick():
+            if then is not None and not self.closing:
+                return False                       # fade out was cancelled
+            value = min(1, max(0, Gtk.Widget.get_opacity(self) + step))
+            Gtk.Widget.set_opacity(self, value)
+            if (step > 0 and value >= target) or (step < 0 and value <= target):
+                if then:
+                    then()
+                return False
+            return True
+        GLib.timeout_add(16, tick)
 
     def _auto_close(self):
         if self.hovered:
             return True           # wait while the mouse is on it
-        self.destroy()
+        self.closing = True
+        self._fade_to(0, self.destroy)
         return False
 
     def _show_all(self):
@@ -582,115 +700,144 @@ class Popup(Gtk.Window):
 # the full result window
 # --------------------------------------------------------------------------
 
-class ResultWindow(Gtk.Window):
+class ResultWindow(ShelfWindow):
+    LAYOUTS = [("reading", "Reading order (text, columns)"), ("table", "Keep rows (tables, lists)")]
+
     def __init__(self, app):
-        super().__init__(title="Text Grab")
+        super().__init__("Text Grab")
         self.app = app
         self.grab = None
-        self.set_default_size(560, 520)
-        self.set_keep_above(True)
-        self.set_icon_name("edit-select-all")
+        self.set_default_size(540, 480)
         self.connect("delete-event", lambda *_: self.hide() or True)
         self.connect("key-press-event", lambda _w, e: (self.hide() or True) if e.keyval == Gdk.KEY_Escape else False)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_border_width(10)
-        self.add(box)
+        copy = self.add_header_button(icon_button(ICON_COPY, "Copy", "Copy the text (with your edits)"))
+        copy.connect("clicked", lambda *_: self._copy())
+        self.note_button = self.add_header_button(
+            icon_button(ICON_NOTE, "Note", "Put the text on a Quick Notes post-it"))
+        self.note_button.connect("clicked", lambda *_: (self.app.to_quick_notes(self._text()),
+                                                        self._say("✓ Sent to Quick Notes")))
+        again = self.add_header_button(icon_button(ICON_GRAB, "Again", "Grab again"))
+        again.connect("clicked", lambda *_: (self.hide(), self.app.start_grab()))
+        menu_button = Gtk.MenuButton()
+        menu_button.set_relief(Gtk.ReliefStyle.NONE)
+        menu_button.set_can_focus(False)
+        menu_button.set_tooltip_text("How to read it")
+        menu_button.set_image(Gtk.Image.new_from_icon_name("open-menu-symbolic", Gtk.IconSize.MENU))
+        menu_button.set_popup(self._build_menu())
+        self.add_header_button(menu_button)
+        close = self.add_header_button(icon_button(ICON_CLOSE, "✕", "Close (Esc)"))
+        close.connect("clicked", lambda *_: self.hide())
+
         self.image = Gtk.Image()
         self.image.set_halign(Gtk.Align.START)
-        box.pack_start(self.image, False, False, 0)
+        self.body.pack_start(self.image, False, False, 0)
         self.qr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        box.pack_start(self.qr_box, False, False, 0)
+        self.body.pack_start(self.qr_box, False, False, 0)
         scroller = Gtk.ScrolledWindow()
-        scroller.set_shadow_type(Gtk.ShadowType.IN)
+        scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroller.get_style_context().add_class("tg-text")
         self.view = Gtk.TextView()
         self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self.view.set_monospace(True)
         self.view.set_left_margin(8)
         self.view.set_right_margin(8)
         self.view.set_top_margin(6)
+        self.view.set_bottom_margin(6)
         scroller.add(self.view)
-        box.pack_start(scroller, True, True, 0)
+        self.body.pack_start(scroller, True, True, 0)
 
-        row = Gtk.Box(spacing=6)
-        self.layout_combo = Gtk.ComboBoxText()
-        self.layout_combo.append("reading", "Reading order (text, columns)")
-        self.layout_combo.append("table", "Keep rows (tables, lists)")
-        self.layout_combo.set_tooltip_text("Read the same picture again in another way")
-        self.layout_combo.connect("changed", self._relayout)
-        row.pack_start(self.layout_combo, False, False, 0)
-        self.status = Gtk.Label(xalign=0)
-        self.status.get_style_context().add_class("tg-dim")
-        row.pack_start(self.status, True, True, 0)
-        copy = Gtk.Button(label="Copy")
-        copy.set_tooltip_text("Copy the text (including your edits)")
-        copy.connect("clicked", lambda *_: self._copy())
-        row.pack_start(copy, False, False, 0)
-        self.note_button = Gtk.Button(label="To Quick Notes")
-        self.note_button.connect("clicked", lambda *_: self.app.to_quick_notes(self._text()))
-        row.pack_start(self.note_button, False, False, 0)
-        again = Gtk.Button(label="Grab again")
-        again.connect("clicked", lambda *_: (self.hide(), self.app.start_grab()))
-        row.pack_start(again, False, False, 0)
-        box.pack_start(row, False, False, 0)
+        self.footer.pack_start(self.status, True, True, 0)
+        grip = Gtk.EventBox()
+        grip.add(Gtk.Label(label="◢"))
+        grip.set_tooltip_text("Resize")
+        grip.connect("button-press-event", self._on_grip_press)
+        grip.connect("realize", lambda w: w.get_window().set_cursor(
+            Gdk.Cursor.new_from_name(w.get_display(), "se-resize")))
+        self.footer.pack_end(grip, False, False, 0)
+
+    def _build_menu(self):
+        menu = Gtk.Menu()
+        self.layout_items = {}
+        group = None
+        for key, label in self.LAYOUTS:
+            item = Gtk.RadioMenuItem.new_with_label_from_widget(group, label)
+            group = item
+            item.connect("toggled", self._relayout, key)
+            menu.append(item)
+            self.layout_items[key] = item
+        menu.append(Gtk.SeparatorMenuItem())
+        picture = Gtk.MenuItem(label="Open the picture")
+        picture.connect("activate", lambda *_: self.grab and Gio.AppInfo.launch_default_for_uri(
+            GLib.filename_to_uri(self.grab.original), None))
+        menu.append(picture)
+        menu.show_all()
+        return menu
+
+    def _on_grip_press(self, _widget, event):
+        if event.button == 1:
+            self.begin_resize_drag(Gdk.WindowEdge.SOUTH_EAST, event.button,
+                                   int(event.x_root), int(event.y_root), event.time)
+        return True
 
     def _text(self):
         buf = self.view.get_buffer()
         return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
 
+    def _say(self, text):
+        self.status.set_text(text)
+
     def _copy(self):
         self.app.copy(self._text())
-        self.status.set_text("Copied")
+        self._say("✓ Copied")
+
+    def _describe(self):
+        grab = self.grab
+        if grab.error:
+            return grab.error
+        if not grab.text:
+            return "No text found" if not grab.qr else "✓ QR code copied"
+        lines = len(grab.text.splitlines())
+        return f"{lines} line{'s' if lines != 1 else ''} · {len(grab.text)} characters · you can edit it"
 
     def show_grab(self, grab):
         self.grab = grab
         pb = grab.pixbuf
-        if pb.get_height() > 140 or pb.get_width() > 520:
-            factor = min(140 / pb.get_height(), 520 / pb.get_width())
+        if pb.get_height() > 120 or pb.get_width() > 500:
+            factor = min(120 / pb.get_height(), 500 / pb.get_width())
             pb = pb.scale_simple(max(1, int(pb.get_width() * factor)), max(1, int(pb.get_height() * factor)),
                                  GdkPixbuf.InterpType.BILINEAR)
         self.image.set_from_pixbuf(pb)
         for child in self.qr_box.get_children():
             self.qr_box.remove(child)
         for code in grab.qr:
-            line = Gtk.Box(spacing=6)
-            line.get_style_context().add_class("tg-qr")
-            label = Gtk.Label(label=f"QR: {code}", xalign=0)
-            label.set_selectable(True)
-            label.set_line_wrap(True)
-            line.pack_start(label, True, True, 0)
-            copy = Gtk.Button(label="Copy")
-            copy.connect("clicked", lambda _b, c=code: self.app.copy(c))
-            line.pack_start(copy, False, False, 0)
-            if re.match(r"^(https?://|www\.)", code, re.I):
-                open_button = Gtk.Button(label="Open")
-                open_button.connect("clicked", lambda _b, c=code: self.app.open_link(c))
-                line.pack_start(open_button, False, False, 0)
-            self.qr_box.pack_start(line, False, False, 0)
-        self.qr_box.show_all()
+            self.qr_box.pack_start(qr_row(self.app, code, with_copy=True), False, False, 0)
+        self.view.set_monospace(grab.layout == "table")
         self.view.get_buffer().set_text(grab.text or "")
-        self.layout_combo.handler_block_by_func(self._relayout)
-        self.layout_combo.set_active_id(grab.layout)
-        self.layout_combo.handler_unblock_by_func(self._relayout)
-        self.note_button.set_visible(os.path.exists(QUICK_NOTES))
-        self.status.set_text(grab.error or "")
+        item = self.layout_items[grab.layout]
+        item.handler_block_by_func(self._relayout)
+        item.set_active(True)
+        item.handler_unblock_by_func(self._relayout)
+        self._say(self._describe())
         self.show_all()
+        self.qr_box.set_visible(bool(grab.qr))
         self.note_button.set_visible(os.path.exists(QUICK_NOTES))
         self.present()
 
-    def _relayout(self, combo):
-        if not self.grab:
+    def _relayout(self, item, layout):
+        if not item.get_active() or not self.grab:
             return
-        layout = combo.get_active_id()
-        self.status.set_text("reading again…")
+        self._say("reading again…")
         grab = self.grab
 
-        def work():
-            grab.read(layout)
-            GLib.idle_add(lambda: (self.view.get_buffer().set_text(grab.text or ""),
-                                   self.app.copy(grab.text) if grab.text else None,
-                                   self.status.set_text("copied")) and False)
-        threading.Thread(target=work, daemon=True).start()
+        def done():
+            self.view.set_monospace(layout == "table")
+            self.view.get_buffer().set_text(grab.text or "")
+            if grab.text:
+                self.app.copy(grab.text)
+            self._say(("✓ Copied · " if grab.text else "") + self._describe())
+            return False
+
+        threading.Thread(target=lambda: (grab.read(layout), GLib.idle_add(done)), daemon=True).start()
 
 
 # --------------------------------------------------------------------------
@@ -703,6 +850,7 @@ class TextGrabApp(Gtk.Application):
         self.last = None
         self.busy = False
         self.result_window = None
+        self.popup = None
         self.hotkey = None
 
     def do_startup(self):
@@ -785,8 +933,10 @@ class TextGrabApp(Gtk.Application):
                 self.copy(grab.text)
             elif grab.qr:
                 self.copy(grab.qr[0])
-            popup = Popup(self, grab)
-            popup.show_all()
+            self.close_popup()
+            self.popup = Popup(self, grab)
+            self.popup.connect("destroy", lambda w: setattr(self, "popup", None) if self.popup is w else None)
+            self.popup.show_all()
             return False
 
         threading.Thread(target=lambda: (grab.read(), GLib.idle_add(done)), daemon=True).start()
@@ -815,7 +965,12 @@ class TextGrabApp(Gtk.Application):
         except OSError as e:
             self.show_message(f"Could not reach Quick Notes: {e}")
 
+    def close_popup(self):
+        if self.popup is not None:
+            self.popup.destroy()
+
     def show_result(self, grab):
+        self.close_popup()
         if self.result_window is None:
             self.result_window = ResultWindow(self)
         self.result_window.show_grab(grab)
