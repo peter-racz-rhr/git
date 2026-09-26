@@ -52,8 +52,11 @@ GROQ_URL = os.environ.get("MAIL_BRIEF_GROQ_URL", "https://api.groq.com/openai/v1
 # Unread mail from the last week, without Gmail's Promotions / Social tabs (ads, social
 # network notifications) - no AI credit is spent on those.
 GMAIL_QUERY = "is:unread newer_than:7d -category:promotions -category:social"
-MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+# Best first. Groq retires models from time to time; if the chosen one is gone, the
+# widget asks Groq which models exist and switches to the first available one below.
+MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "openai/gpt-oss-20b"]
 DEFAULT_MODEL = MODELS[0]
+GROQ_MODELS_URL = GROQ_URL.rsplit("/chat/completions", 1)[0] + "/models"
 MAX_NEW_PER_CHECK = 30          # stay well inside Groq's free limits
 MAX_BODY_CHARS = 6000           # very long emails are cut here before summarizing
 USER_AGENT = "MailBrief/1.0 (personal Linux desktop widget)"
@@ -278,6 +281,51 @@ class Summarizer:
     def __init__(self, api_key, model):
         self.api_key = api_key
         self.model = model or DEFAULT_MODEL
+        self.switched_from = None      # set when a retired model was replaced
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
+                "User-Agent": USER_AGENT}
+
+    def available_models(self):
+        request = urllib.request.Request(GROQ_MODELS_URL, headers=self._headers())
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read())
+        return [m.get("id") for m in data.get("data", []) if m.get("id")]
+
+    def _pick_replacement(self):
+        available = self.available_models()
+        for name in MODELS:
+            if name in available and name != self.model:
+                return name
+        # none of ours: take any general chat model Groq offers
+        for name in available:
+            low = name.lower()
+            if name != self.model and not any(w in low for w in ("whisper", "tts", "guard", "embed", "vision")):
+                return name
+        return None
+
+    @staticmethod
+    def _error_text(e):
+        try:
+            return json.loads(e.read()).get("error", {}).get("message", "")[:200]
+        except Exception:
+            return ""
+
+    def _payload(self, text):
+        payload = {
+            "model": self.model,
+            "temperature": 0.2,
+            "max_tokens": 1500,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT.format(today=datetime.date.today().isoformat())},
+                {"role": "user", "content": text},
+            ],
+        }
+        if self.model.startswith("openai/gpt-oss"):
+            payload["reasoning_effort"] = "low"      # quick answers, fewer tokens
+        return payload
 
     def summarize(self, info):
         body = info["body"]
@@ -286,37 +334,43 @@ class Summarizer:
         text = (f"From: {info['sender']} <{info['address']}>\n"
                 f"Date: {datetime.datetime.fromtimestamp(info['date']).strftime('%Y-%m-%d %H:%M')}\n"
                 f"Subject: {info['subject']}\n\n{body or '(empty)'}")
-        payload = {
-            "model": self.model,
-            "temperature": 0.2,
-            "max_tokens": 500,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT.format(today=datetime.date.today().isoformat())},
-                {"role": "user", "content": text},
-            ],
-        }
-        for attempt in range(6):
-            request = urllib.request.Request(
-                GROQ_URL, data=json.dumps(payload).encode(), method="POST",
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
-                         "User-Agent": USER_AGENT})
+        payload = self._payload(text)
+        switched = False
+        for attempt in range(8):
+            request = urllib.request.Request(GROQ_URL, data=json.dumps(payload).encode(), method="POST",
+                                             headers=self._headers())
             try:
-                with urllib.request.urlopen(request, timeout=60) as response:
+                with urllib.request.urlopen(request, timeout=90) as response:
                     answer = json.loads(response.read())
                 break
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
                     raise PermissionError("Groq refused the API key. Check it in Settings.") from e
-                if e.code == 429 and attempt < 5:     # free-tier rate limit: wait and retry
+                if e.code == 404 and not switched:
+                    # the model was retired: switch to one that exists and try again
+                    replacement = self._pick_replacement()
+                    if replacement is None:
+                        raise IOError(f"Groq model {self.model} is gone and no replacement was found") from e
+                    self.switched_from = self.switched_from or self.model
+                    self.model = replacement
+                    payload = self._payload(text)
+                    switched = True
+                    continue
+                if e.code == 400 and "response_format" in payload:
+                    payload.pop("response_format")    # some models don't support JSON mode
+                    continue
+                if e.code == 429 and attempt < 7:     # free-tier rate limit: wait and retry
                     wait = float(e.headers.get("retry-after") or 10 * (attempt + 1))
                     time.sleep(min(90.0, max(1.0, wait)))
                     continue
-                if e.code >= 500 and attempt < 5:
+                if e.code >= 500 and attempt < 7:
                     time.sleep(5 * (attempt + 1))
                     continue
-                raise IOError(f"Groq error {e.code}") from e
-        content = answer["choices"][0]["message"]["content"]
+                detail = self._error_text(e)
+                raise IOError(f"Groq error {e.code}" + (f": {detail}" if detail else "")) from e
+        else:
+            raise IOError("Groq kept refusing (rate limit), will try again next check")
+        content = answer["choices"][0]["message"].get("content") or ""
         try:
             result = json.loads(content)
         except ValueError:
@@ -845,7 +899,7 @@ class MailWindow(Gtk.ApplicationWindow):
                     raise
                 except Exception as e:     # keep going; this one is retried next time
                     errors.append(str(e))
-            return unread, summaries, errors
+            return unread, summaries, errors, summarizer
 
         def done(result):
             self.checking = False
@@ -857,7 +911,9 @@ class MailWindow(Gtk.ApplicationWindow):
                 print(f"mail-brief: {result}", file=sys.stderr)
                 self.refresh_ui()
                 return
-            unread, summaries, errors = result
+            unread, summaries, errors, used = result
+            if used.switched_from and used.model != self.settings.get("model"):
+                self.settings.set("model", used.model)      # a retired model was replaced
             unread_set = set(unread)
             for msgid, entry in self.cache.items():
                 entry["unread"] = msgid in unread_set
@@ -950,7 +1006,11 @@ class MailWindow(Gtk.ApplicationWindow):
             if name == current_model:
                 model.set_active(i)
         if model.get_active() < 0:
-            model.set_active(0)
+            if current_model and current_model not in MODELS:
+                model.append_text(current_model)
+                model.set_active(len(MODELS))
+            else:
+                model.set_active(0)
         grid.attach(model, 1, 3, 1, 1)
         grid.attach(Gtk.Label(label="Check every (minutes)", xalign=1), 0, 4, 1, 1)
         interval = Gtk.SpinButton.new_with_range(10, 720, 10)
@@ -1071,13 +1131,22 @@ def diagnose():
             conn.logout()
         except Exception:
             pass
+    summarizer = Summarizer(settings.secrets.get("groq_key", ""), settings.get("model", DEFAULT_MODEL))
+    print(f"5. Groq model: {summarizer.model}")
     try:
-        result = Summarizer(settings.secrets.get("groq_key", ""), settings.get("model", DEFAULT_MODEL)).summarize(
+        result = summarizer.summarize(
             {"sender": "Test", "address": "test@example.com", "date": time.time(), "subject": "Test",
              "body": "Hi! The math test moves to next Monday. Please bring a calculator."})
-        print(f"5. Groq: ok - {result['summary']}")
+        if summarizer.switched_from:
+            print(f"   {summarizer.switched_from} is retired - switched to {summarizer.model}")
+            settings.set("model", summarizer.model)
+        print(f"6. Groq: ok - {result['summary']}")
     except Exception as e:
-        print(f"5. Groq: FAILED - {e}")
+        print(f"6. Groq: FAILED - {e}")
+        try:
+            print(f"   models your key can use: {', '.join(summarizer.available_models())}")
+        except Exception:
+            pass
         return 1
     return 0
 

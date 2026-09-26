@@ -68,7 +68,7 @@ Press **Save & check now**. After a few seconds the line shows your emails.
 ## Settings
 
 Menu (three lines) > **Settings**: address, app password, Groq key, the AI model
-(`llama-3.3-70b-versatile` by default) and how often to check.
+(`openai/gpt-oss-120b` by default; if Groq retires a model, the widget switches to an available one on its own) and how often to check.
 
 If something does not work, run `mail-brief --diagnose` in a terminal: it checks the Gmail
 login, the search and the Groq key step by step and says where it fails.
