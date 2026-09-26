@@ -63,6 +63,9 @@ USER_AGENT = "MailBrief/1.0 (personal Linux desktop widget)"
 
 SYSTEM_PROMPT = """You sort and summarize emails for a high school student who also does \
 Model United Nations (MUN). Today is {today}.
+Calendar for the next weeks (use it to turn words like "Friday", "tomorrow" or "next Monday" \
+into dates - look the date up here, do not calculate it):
+{calendar}
 
 For the email you get, answer with a JSON object with exactly these keys:
 - "important": true if it matters to the student personally: messages from teachers, the \
@@ -72,13 +75,14 @@ automatic notifications that need nothing, and general announcements.
 - "action": if the student has to do something, a very short imperative phrase in the \
 email's language (e.g. "Reply to confirm attendance"); otherwise null.
 - "deadline": the date by which something must be done or happens, as YYYY-MM-DD \
-(resolve words like "Friday" or "tomorrow" using today's date); otherwise null.
+(look weekday words up in the calendar above); otherwise null.
 - "deadline_note": a few words saying what the deadline is for, in the email's language; \
 otherwise null.
 - "summary": the summary, written in the SAME LANGUAGE as the email. Make it as short as \
 possible WITHOUT losing information: keep every date, time, place, name, number, link \
-purpose and request. One short sentence for simple emails, a few for dense ones. No \
-greeting, no "This email says".
+purpose and request. Write dates exactly the way the email does (if it says "next \
+Monday", write "next Monday" - never add a date the email doesn't state). One short sentence \
+for simple emails, a few for dense ones. No greeting, no "This email says".
 
 Answer with the JSON object only."""
 
@@ -86,6 +90,16 @@ Answer with the JSON object only."""
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+
+def system_prompt():
+    """The instructions, with today's weekday and a 3-week calendar so dates come out right."""
+    today = datetime.date.today()
+    days = [today + datetime.timedelta(days=i) for i in range(22)]
+    calendar = "\n".join(
+        f"  {d.strftime('%A')} {d.isoformat()}" + (" (today)" if i == 0 else " (tomorrow)" if i == 1 else "")
+        for i, d in enumerate(days))
+    return SYSTEM_PROMPT.format(today=f"{today.strftime('%A')}, {today.isoformat()}", calendar=calendar)
+
 
 def run_async(work, done=None):
     def runner():
@@ -319,7 +333,7 @@ class Summarizer:
             "max_tokens": 1500,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT.format(today=datetime.date.today().isoformat())},
+                {"role": "system", "content": system_prompt()},
                 {"role": "user", "content": text},
             ],
         }
