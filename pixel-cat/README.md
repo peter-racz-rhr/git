@@ -9,6 +9,8 @@ headset and bobs her head.
 
 ![What she does](../docs/screenshots/pixel-cat-showcase.png)
 
+![Parachute, climbing, bedtime and exploring](../docs/screenshots/pixel-cat-more.png)
+
 ## Install
 
 ```bash
@@ -37,16 +39,39 @@ Uninstall with `./uninstall.sh` (add `--forget` to also forget her name and mood
 | Drag her | dangles from your pointer; let go (or throw her) and she lands on her feet |
 | Move a window she's sitting on | rides along |
 | Close or minimize that window | falls and lands on whatever is below |
-| **Ctrl+Alt+C** | comes running to your mouse, or pops over to it |
-| Right-click her | her mood and needs, **Give a treat**, **Play with yarn**, sounds on/off, change coat or name |
+| **Ctrl+Alt+C** | comes to your mouse: she runs, jumps from window to window and climbs up window sides to get there (and only pops over in a little cloud if there's really no way) |
+| Right-click her | her mood and needs, **Give a treat**, **Play with yarn**, **Send her to bed**, sounds on/off, exploring on/off, change coat or name |
 | Play music (Spotify or anything else) | puts on a headset, bobs her head, little music notes |
 | Watch a video or give a presentation in fullscreen | hides until you're done |
+
+When she falls from high up (a closed window, a throw, a drop from the top of the screen)
+she opens a little **parachute** and floats down.
 
 On her own she walks around, sits, grooms, yawns and naps (more at night and more when
 she's tired), jumps between windows, walks along the panel, and sometimes climbs up the
 side of the screen and walks upside down along the top before dropping down. If your
 mouse is near her, she may crouch, wiggle, and pounce on it. Her favourite nap spot is a
 Quick Notes post-it.
+
+## Bedtime
+
+Right-click > **Send her to bed** (it says "it's late!" in the evening). She puts on her
+pajamas and a nightcap, a little bed appears at the bottom of the screen, and she walks
+over, climbs in and sleeps. Pet her in bed and she purrs in her sleep.
+
+- At night she sleeps until 7:00 in the morning, even if you shut the laptop down; during
+  the day it's a 45-minute nap.
+- Right-click > **Wake her up**, press Ctrl+Alt+C, or pick her up to wake her earlier.
+
+## Exploring inside windows
+
+She also uses long lines inside your windows as little shelves: the top of a message box
+(Claude, Messenger), chat bubbles, a video's progress bar, toolbars. She doesn't know what
+they are; every 5 seconds she looks at the screen for long, clean horizontal lines. When
+the page scrolls and her line moves away, she falls (with her parachute if it's high).
+
+Turn it off with right-click > **Explore inside windows** if you'd rather she stays on top
+of the windows. Looking at the screen is done locally; nothing is saved or sent anywhere.
 
 ## Her needs
 
@@ -85,7 +110,8 @@ Restart her after changing it (`pixel-cat --quit`, then start Pixel Cat from the
 - She needs an X11 desktop (Linux Mint Cinnamon, MATE or Xfce). On Wayland she can't see
   or sit on your windows.
 - Windows are found with Wnck (`gir1.2-wnck-3.0`); the installer adds it if it's missing.
-- In testing she used about 2-3% of one CPU core.
+- In testing she used about 3% of one CPU core (a little more with exploring on, on a
+  slower laptop).
 - Her name and mood are saved in `~/.local/share/pixel-cat/cat.json`.
 
 ## Requirements

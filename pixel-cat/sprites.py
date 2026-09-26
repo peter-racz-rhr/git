@@ -241,6 +241,50 @@ GNNNNNNNG
 ..GGGGG..
 """
 
+NIGHTCAP = """
+WW...........
+WWQO.........
+.OQQOOOO.....
+..OQQQQQOO...
+..OQQQQQQQO..
+.OWWWWWWWWWO.
+"""
+
+PARACHUTE = """
+.......OOOOOOOOOO.......
+.....OORRRWWWWRRROO.....
+...OORRRRWWWWWWRRRROO...
+..ORRRRRWWWWWWWWRRRRRO..
+.ORRRRRRWWWWWWWWRRRRRRO.
+ORRRRRRRWWWWWWWWRRRRRRRO
+OOOOOOOOOOOOOOOOOOOOOOOO
+.G.........GG.........G.
+..G........GG........G..
+...G.......GG.......G...
+....G......GG......G....
+.....G.....GG.....G.....
+......G....GG....G......
+.......G...GG...G.......
+........G..GG..G........
+.........OOOOOO.........
+"""
+
+BED = """
+..OOOOOOOOOOOOOOOOOOOOOOOOOO..
+.OTTTTTTTTTTTTTTTTTTTTTTTTTTO.
+OTTUUUUUUUUUUUUUUUUUUUUUUUUTTO
+OTUUUUUUUUUUUUUUUUUUUUUUUUUUTO
+OTTTTTTTTTTTTTTTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTTTTTTTTTTTTTTTO
+.OOOOOOOOOOOOOOOOOOOOOOOOOOOO.
+"""
+
+BED_FRONT = """
+OTTTTTTTTTTTTTTTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTTTTTTTTTTTTTTTO
+.OOOOOOOOOOOOOOOOOOOOOOOOOOOO.
+"""
+
 COATS = {
     # key: (label, colors)
     "tabby": ("Orange tabby", dict(O="#3b2417", B="#f0a04b", S="#c4642a", L="#fbe3c0", X="#f0a04b",
@@ -258,7 +302,7 @@ COATS = {
 }
 
 COMMON = dict(R="#d9344f", W="#ffffff", H="#2f2f3a", C="#e0455a", F="#6f9fd8", Y="#e86fa8",
-              N="#f4f4f8", G="#9a9aa6")
+              N="#f4f4f8", G="#9a9aa6", Q="#6f95d0", T="#b07a4a", U="#e7c6e8")
 CALICO_PATCHES = ("#e8883a", "#e8883a", "#5a4d47")
 
 
@@ -274,11 +318,15 @@ def blank():
     return [["." for _ in range(W)] for _ in range(H)]
 
 
+BODY_PARTS = {"BODY", "SIT_BODY", "LOAF", "HELD_BODY"}
+
+
 def stamp(canvas, part, x, y):
+    body = part in BODY_PARTS if isinstance(part, str) else False
     for r, row in enumerate(PARTS[part] if isinstance(part, str) else part):
         for c, ch in enumerate(row):
             if ch != "." and 0 <= y + r < len(canvas) and 0 <= x + c < len(canvas[0]):
-                canvas[y + r][x + c] = ch
+                canvas[y + r][x + c] = ch.lower() if body and ch in "BSL" else ch
     return canvas
 
 
@@ -346,7 +394,7 @@ def jumping():
     return c, (hx, hy)
 
 
-def held():
+def held(head="HEAD_SAD"):
     c = blank()
     stamp(c, "TAIL_DOWN", 6, 13)
     stamp(c, "HELD_BODY", 9, 8)
@@ -354,7 +402,7 @@ def held():
     stamp(c, "LEG", 14, 16)
     stamp(c, "LEG_SHORT", 15, 11)
     hx, hy = 8, 1
-    stamp(c, "HEAD_SAD", hx, hy)
+    stamp(c, head, hx, hy)
     return c, (hx, hy)
 
 
@@ -383,6 +431,8 @@ def build_frames():
     f["crouch1"] = crouch(wiggle=1)
     f["jump"] = jumping()
     f["held"] = held()
+    f["dangle"] = held(head="HEAD")
+    f["dangle_happy"] = held(head="HEAD_HAPPY")
     f["eat0"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=6, head_dx=1)
     f["eat1"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=7, head_dx=1)
     return f
@@ -391,7 +441,14 @@ def build_frames():
 FRAMES = build_frames()
 
 
-def color_of(ch, coat, x, y):
+PAJAMA = {"b": "#8db4e6", "s": "#5f86c8", "l": "#dce9f8"}
+
+
+def color_of(ch, coat, x, y, pajamas=False):
+    if ch in "bsl":
+        if pajamas:
+            return PAJAMA[ch]
+        ch = ch.upper()
     colors = COATS[coat][1]
     if coat == "calico" and ch in "BS":
         # patches of orange and black on white
@@ -419,7 +476,14 @@ def with_headset(frame):
     return c, (hx, hy)
 
 
-def render(canvas, coat, scale, flip=False):
+def with_nightcap(frame):
+    canvas, (hx, hy) = frame
+    c = [row[:] for row in canvas]
+    stamp(c, "NIGHTCAP", hx - 3, hy - 5)
+    return c, (hx, hy)
+
+
+def render(canvas, coat, scale, flip=False, pajamas=False):
     """A cairo image of a frame (or any part grid)."""
     import cairo
     rows = len(canvas)
@@ -430,7 +494,7 @@ def render(canvas, coat, scale, flip=False):
         for x, ch in enumerate(row):
             if ch == ".":
                 continue
-            value = color_of(ch, coat, x, y)
+            value = color_of(ch, coat, x, y, pajamas)
             if value is None:
                 continue
             cr.set_source_rgb(*hex_rgb(value))

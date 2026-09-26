@@ -20,10 +20,13 @@ Settings in ~/.config/pixel-cat/settings.ini:
 
 import ctypes
 import ctypes.util
+import heapq
+import itertools
 import json
 import math
 import os
 import random
+import re
 import shutil
 import struct
 import subprocess
@@ -106,6 +109,9 @@ class Pet:
         self.affection = 70.0
         self.muted = False
         self.x = None
+        self.in_bed = False
+        self.wake_at = 0.0
+        self.explore = True
         self.load()
 
     def load(self):
@@ -114,7 +120,7 @@ class Pet:
                 data = json.load(f)
         except (OSError, ValueError):
             return
-        for key in ("name", "coat", "fullness", "fun", "energy", "affection", "muted", "x"):
+        for key in ("name", "coat", "fullness", "fun", "energy", "affection", "muted", "x", "in_bed", "wake_at", "explore"):
             if key in data:
                 setattr(self, key, data[key])
         if self.coat not in sprites.COATS:
@@ -123,7 +129,7 @@ class Pet:
     def save(self):
         os.makedirs(DATA_DIR, exist_ok=True)
         data = {k: getattr(self, k) for k in ("name", "coat", "fullness", "fun", "energy", "affection",
-                                              "muted", "x")}
+                                              "muted", "x", "in_bed", "wake_at", "explore")}
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -425,11 +431,12 @@ class Music:
 
 class Seg:
     """A horizontal line the cat can stand on."""
-    __slots__ = ("key", "y", "x1", "x2", "win_x", "kind", "note")
+    __slots__ = ("key", "y", "x1", "x2", "win_x", "kind", "note", "win_w", "win_h")
 
-    def __init__(self, key, y, x1, x2, win_x=0, kind="floor", note=False):
+    def __init__(self, key, y, x1, x2, win_x=0, kind="floor", note=False, win_w=0, win_h=0):
         self.key, self.y, self.x1, self.x2 = key, y, x1, x2
         self.win_x, self.kind, self.note = win_x, kind, note
+        self.win_w, self.win_h = win_w, win_h
 
 
 class World:
@@ -443,6 +450,8 @@ class World:
         self.fullscreen = False
         self.stacking = ()
         self._extents = {}
+        self.windows = []
+        self.ledges = {}             # xid -> [(dx, dy, length)] relative to the window
         self.on_stacking_changed = None
         if self.screen is not None:
             self.screen.connect("window-stacking-changed", lambda *_: self.on_stacking_changed
@@ -510,20 +519,127 @@ class World:
             active = self.screen.get_active_window()
             self.fullscreen = bool(active is not None and active.is_fullscreen() and not active.is_minimized())
             self.stacking = tuple(u[0].get_xid() for u in usable)
+            self.windows = [(u[0].get_xid(), u[1], u[2], u[3], u[4]) for u in usable]
             for index, (w, x, y, width, height) in enumerate(usable):
-                if width < self.MIN_WIDTH or y < y0 + 40:
-                    continue
-                pieces = [(x + 3, x + width - 3)]
-                for _w2, ox, oy, ow, oh in usable[index + 1:]:
-                    if oy <= y + 1 and oy + oh > y:
-                        pieces = self._cut(pieces, ox, ox + ow)
-                title = (w.get_name() or "").lower()
-                klass = ((w.get_class_group_name() or "") + " " + (w.get_class_instance_name() or "")).lower()
-                note = "quick note" in title or "quick_notes" in klass or "quick-notes" in klass
-                for a, b in pieces:
-                    if b - a >= 40:
-                        segs.append(Seg(("win", w.get_xid()), y, a, b, x, "win", note))
+                xid = w.get_xid()
+                above = usable[index + 1:]
+                if width >= self.MIN_WIDTH and y >= y0 + 40:
+                    pieces = [(x + 3, x + width - 3)]
+                    for _w2, ox, oy, ow, oh in above:
+                        if oy <= y + 1 and oy + oh > y:
+                            pieces = self._cut(pieces, ox, ox + ow)
+                    title = (w.get_name() or "").lower()
+                    klass = ((w.get_class_group_name() or "") + " " + (w.get_class_instance_name() or "")).lower()
+                    note = "quick note" in title or "quick_notes" in klass or "quick-notes" in klass
+                    for a, b in pieces:
+                        if b - a >= 40:
+                            segs.append(Seg(("win", xid), y, a, b, x, "win", note, width, height))
+                # lines inside the window (text boxes, chat bubbles, progress bars ...)
+                for dx, dy, length in self.ledges.get(xid, ()):
+                    ly = y + dy
+                    if ly > y + height - 8:
+                        continue
+                    pieces = [(x + dx, x + dx + length)]
+                    for _w2, ox, oy, ow, oh in above:
+                        if oy <= ly + 1 and oy + oh > ly - 30:
+                            pieces = self._cut(pieces, ox, ox + ow)
+                    for a, b in pieces:
+                        if b - a >= 60:
+                            segs.append(Seg(("ledge", xid, dy), ly, a, b, x, "ledge", False, width, height))
         self.segments = segs
+
+    def scan_ledges(self, exclude):
+        """Look at the screen for long horizontal lines inside windows (the top of a text box,
+        a chat bubble, a video's progress bar ...) that she could sit on. It only sees lines,
+        not what they are. Everything heavy happens in cairo; Python only scans bit rows."""
+        if not self.windows:
+            self.ledges = {}
+            return
+        X0, Y0, X1, Y1 = self.bounds
+        W, H = X1 - X0, Y1 - Y0
+        pb = Gdk.pixbuf_get_from_window(Gdk.get_default_root_window(), X0, Y0, W, H)
+        if pb is None:
+            return
+        img = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+        cr = cairo.Context(img)
+        Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
+        cr.paint()
+        # paint over the cat (and her things) by stretching the pixel column next to her,
+        # so a line she's standing on still looks like one line
+        for ex_x, ex_y, ex_w, ex_h in exclude:
+            rx, ry = int(ex_x - X0), int(ex_y - Y0)
+            source_x = rx - 1 if rx >= 1 else min(W - 1, rx + int(ex_w))
+            column = img.create_for_rectangle(source_x, 0, 1, H)
+            cr.save()
+            cr.rectangle(rx, ry, ex_w, ex_h)
+            cr.clip()
+            cr.set_source_surface(column, rx if source_x < rx else rx + ex_w - 1, 0)
+            cr.get_source().set_extend(cairo.EXTEND_PAD)
+            cr.paint()
+            cr.restore()
+        diff = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+        cr = cairo.Context(diff)
+        cr.set_source_surface(img, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_DIFFERENCE)
+        cr.set_source_surface(img, 0, -1)          # |row y - row y+1|
+        cr.paint()
+        BW = W // 4
+        small = cairo.ImageSurface(cairo.FORMAT_RGB24, BW, H)
+        cr = cairo.Context(small)
+        cr.scale(BW / W, 1)
+        cr.set_source_surface(diff, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_GOOD)
+        cr.paint()
+        small.flush()
+        data = bytes(small.get_data())
+        stride = small.get_stride()
+        table = bytes(1 if v > 16 else 0 for v in range(256))
+        rows = []
+        for y in range(H):
+            row = data[y * stride: y * stride + BW * 4]
+            bits = (int.from_bytes(row[0::4].translate(table), "big")
+                    | int.from_bytes(row[1::4].translate(table), "big")
+                    | int.from_bytes(row[2::4].translate(table), "big"))
+            rows.append(bits.to_bytes(BW, "big"))
+        min_cells = 36                              # 144 px
+        run = re.compile(rb"\x01{%d,}" % min_cells)
+        needle = b"\x01" * min_cells
+        found = {}
+        for y in range(6, H - 2):
+            bits = rows[y]
+            if needle not in bits:
+                continue
+            for m in run.finditer(bits):
+                c0, c1 = m.span()
+                busy = sum(rows[yy][c0:c1].count(1) for yy in range(y - 5, y))
+                if busy > (c1 - c0) * 5 * 0.2:
+                    continue                         # text, pictures: not a clean shelf
+                ly, lx1, lx2 = Y0 + y + 1, X0 + c0 * 4, X0 + c1 * 4
+                owner = None
+                for xid, wx, wy, ww, wh in reversed(self.windows):
+                    if wx <= (lx1 + lx2) / 2 <= wx + ww and wy <= ly <= wy + wh:
+                        owner = (xid, wx, wy, ww, wh)
+                        break
+                if owner is None:
+                    continue
+                xid, wx, wy, ww, wh = owner
+                if ly < wy + 45 or ly > wy + wh - 12:
+                    continue
+                lx1, lx2 = max(lx1, wx + 4), min(lx2, wx + ww - 4)
+                if lx2 - lx1 < 120:
+                    continue
+                found.setdefault(xid, []).append((lx1 - wx, ly - wy, lx2 - lx1))
+        ledges = {}
+        for xid, items in found.items():
+            kept = []
+            for dx, dy, length in sorted(items, key=lambda t: t[1]):
+                # a thick line gives two edges a few pixels apart: keep the upper one
+                if any(abs(dy - ky) < 12 and dx < kx + kl and kx < dx + length for kx, ky, kl in kept):
+                    continue
+                kept.append((dx, dy, length))
+            ledges[xid] = sorted(kept, key=lambda t: -t[2])[:14]
+        self.ledges = ledges
 
     @staticmethod
     def _cut(pieces, a, b):
@@ -555,7 +671,12 @@ class World:
         return best
 
     def find(self, key, x):
-        same = [s for s in self.segments if s.key == key]
+        if key[0] == "ledge":
+            # lines are found again every few seconds; allow a pixel or two of difference
+            same = [s for s in self.segments if s.key[0] == "ledge" and s.key[1] == key[1]
+                    and abs(s.key[2] - key[2]) <= 3]
+        else:
+            same = [s for s in self.segments if s.key == key]
         for s in same:
             if s.x1 - 2 <= x <= s.x2 + 2:
                 return s, same
@@ -717,6 +838,53 @@ class Prop(Gtk.Window):
         return True
 
 
+class Overlay(Gtk.Window):
+    """A click-through picture that the cat moves around (her parachute, her bed)."""
+
+    def __init__(self, surface):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.surface = surface
+        self.w, self.h = surface.get_width(), surface.get_height()
+        self.set_app_paintable(True)
+        composited = rgba_visual(self)
+        self.set_default_size(self.w, self.h)
+        self.resize(self.w, self.h)
+        self.input_shape_combine_region(cairo.Region())
+        if not composited:
+            self.shape_combine_region(Gdk.cairo_region_create_from_surface(surface))
+        self.connect("draw", self._draw)
+        self.pos = None
+
+    def place(self, x, y):
+        pos = (int(round(x)), int(round(y)))
+        if pos != self.pos:
+            self.pos = pos
+            self.move(*pos)
+
+    def _draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.set_source_surface(self.surface, 0, 0)
+        cr.paint()
+        return True
+
+
+def night(hour=None):
+    hour = time.localtime().tm_hour if hour is None else hour
+    return hour >= 20 or hour < 7
+
+
+def next_morning():
+    """7:00 tomorrow (or today, if it's still before 7)."""
+    now = time.localtime()
+    target = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 7, 0, 0, 0, 0, -1))
+    if target <= time.time():
+        target = time.mktime((now.tm_year, now.tm_mon, now.tm_mday + 1, 7, 0, 0, 0, 0, -1))
+    return target
+
+
 # --------------------------------------------------------------------------
 # the cat
 # --------------------------------------------------------------------------
@@ -762,6 +930,10 @@ class Cat(Gtk.Window):
         self.anim = 0.0
 
         self.headset = False
+        self.pajamas = False
+        self.chute = None
+        self.route = None
+        self.bed = None
         self.music_off_since = 0.0
         self.props = []
         self.press = None
@@ -788,6 +960,12 @@ class Cat(Gtk.Window):
             self.x, self.y = float(self.pet.x), float(floor.y)
             self.seg = floor
             self.set_state("sit", random.uniform(3, 6))
+            if self.pet.in_bed and time.time() < self.pet.wake_at:
+                self.pajamas = True
+                self._make_bed(self.x)
+                self._get_in_bed()
+            else:
+                self.pet.in_bed = False
         else:
             px, _py = pointer()
             self.x, self.y = float(clamp(px, x0 + 60, x1 - 60)), float(y0 + 10)
@@ -803,11 +981,13 @@ class Cat(Gtk.Window):
     def _image(self, key):
         if key in self.cache:
             return self.cache[key]
-        name, flip, orient, headset = key
+        name, flip, orient, headset, pajamas = key
         frame = sprites.FRAMES[name]
-        if headset and name != "held":
+        if pajamas:
+            frame = sprites.with_nightcap(frame)
+        elif headset and name != "held":
             frame = sprites.with_headset(frame)
-        img = sprites.render(frame[0], self.pet.coat, self.scale, flip)
+        img = sprites.render(frame[0], self.pet.coat, self.scale, flip, pajamas)
         S = self.S
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, S, S)
         cr = cairo.Context(surface)
@@ -825,7 +1005,7 @@ class Cat(Gtk.Window):
     def _show(self, name, flip=None):
         if flip is None:
             flip = self.facing < 0
-        key = (name, flip, self.orient, self.headset)
+        key = (name, flip, self.orient, self.headset, self.pajamas)
         if key == self.current_key:
             return
         surface, region = self._image(key)
@@ -898,6 +1078,8 @@ class Cat(Gtk.Window):
 
     # ---------------------------------------------------------------- state machine
     def set_state(self, name, length=0.0, **data):
+        if self.chute is not None and name != "fall":
+            self._close_chute()
         self.state, self.t, self.length, self.data = name, 0.0, length, data
         self.anim = 0.0
 
@@ -915,7 +1097,7 @@ class Cat(Gtk.Window):
         if self.hidden:
             self._debug(now)
             return True
-        self.pet.tick(dt, self.state == "sleep")
+        self.pet.tick(dt, self.state in ("sleep", "bed"))
         self.t += dt
         self.anim += dt
         self._music(dt)
@@ -944,33 +1126,55 @@ class Cat(Gtk.Window):
                                    for k in ("fullness", "fun", "energy", "affection")}}, f)
 
     def _refresh(self):
+        now = time.monotonic()
+        if self.pet.explore and not self.hidden and now - getattr(self, "_scan_at", 0) > 5 \
+                and self.state not in ("sleep", "bed", "held"):
+            self._scan_at = now
+            exclude = []
+            if self.pos is not None:
+                exclude.append((self.pos[0], self.pos[1], self.S, self.S))
+            for w in self.props + ([self.chute] if self.chute else []):
+                if w.get_window() is not None:
+                    x, y = w.get_position()
+                    exclude.append((x, y, w.w, w.h))
+            try:
+                self.world.scan_ledges(exclude)
+            except Exception:
+                self.world.ledges = {}
+        elif not self.pet.explore and self.world.ledges:
+            self.world.ledges = {}
         self.world.refresh()
+        extras = self.props + ([self.chute] if self.chute else []) + (list(self.bed[:2]) if self.bed else [])
         if self.world.fullscreen and not self.hidden:
             self.hidden = True
             self.hide()
-            for prop in self.props:
-                prop.hide()
+            for w in extras:
+                w.hide()
         elif not self.world.fullscreen and self.hidden:
             self.hidden = False
             self.show()
-            for prop in self.props:
-                prop.show()
+            for w in extras:
+                w.show()
             self.raise_all()
         self._reattach()
         return True
 
     def raise_all(self):
-        for w in [self] + self.props:
+        bed = [self.bed[0]] if self.bed else []
+        front = [self.bed[1]] if self.bed else []
+        chute = [self.chute] if self.chute else []
+        for w in bed + [self] + self.props + chute + front:
             gdk_window = w.get_window()
             if gdk_window is not None and w.get_visible():
                 gdk_window.raise_()
 
     def _reattach(self):
         """Ride along when her window moves; fall when it closes or gets covered."""
-        if self.seg is None or self.orient != GROUND or self.state in ("jump", "fall", "held", "crouch_jump"):
+        if self.seg is None or self.orient != GROUND or self.state in ("jump", "fall", "held", "crouch_jump",
+                                                                        "bed"):
             return
         seg, same = self.world.find(self.seg.key, self.x)
-        if same and self.seg.kind == "win" and same[0].win_x != self.seg.win_x:
+        if same and self.seg.kind in ("win", "ledge") and same[0].win_x != self.seg.win_x:
             dx = same[0].win_x - self.seg.win_x
             self.x += dx
             for prop in self.props:
@@ -1002,6 +1206,7 @@ class Cat(Gtk.Window):
         self.set_state("fall")
 
     def decide(self):
+        self.route = None
         if not self.on_ground():
             self.fall()
             return
@@ -1238,6 +1443,13 @@ class Cat(Gtk.Window):
         self.x = d["x0"] + (d["x1"] - d["x0"]) * u
         self.y = d["y0"] + (d["y1"] - d["y0"]) * u - 4 * d["H"] * u * (1 - u)
         self._show("jump")
+        if u >= 1 and d.get("climb"):
+            key, side = d["climb"]
+            self.seg = None
+            self.orient = RIGHT_WALL if side == "left" else LEFT_WALL
+            self.x, self.y = d["x1"], d["y1"] - self.S / 2
+            self.set_state("climb", 0, dist=0.0, onto=(key, side))
+            return
         if u >= 1:
             key = d.get("key")
             seg = None
@@ -1255,7 +1467,16 @@ class Cat(Gtk.Window):
     def _st_fall(self, dt):
         self.orient = GROUND
         before = self.y
-        self.vy = min(self.vy + GRAVITY * dt, 1600)
+        if self.chute is None:
+            self.vy = min(self.vy + GRAVITY * dt, 1600)
+            if self.vy > 150 and self.t > 0.15 and self._drop_height() > 170 * self.scale / 2:
+                self._open_chute()
+        if self.chute is not None:
+            # float down gently, swaying a little
+            target = 85 * self.scale / 2
+            self.vy += (target - self.vy) * min(1.0, dt * 5)
+            self.vx *= 0.95
+            self.x += math.sin(self.t * 2.3) * 22 * dt * self.scale / 2
         self.y += self.vy * dt
         self.x += self.vx * dt
         self.vx *= 0.99
@@ -1263,7 +1484,11 @@ class Cat(Gtk.Window):
         if self.x < x0 + 10 or self.x > x1 - 10:
             self.x = clamp(self.x, x0 + 10, x1 - 10)
             self.vx = -self.vx * 0.4
-        self._show("jump")
+        if self.chute is not None:
+            self._show("dangle_happy" if int(self.t / 1.5) % 3 == 2 else "dangle", flip=False)
+            self._place_chute()
+        else:
+            self._show("jump")
         seg = self.world.landing(self.x, before, self.y) if self.vy >= 0 else None
         if seg is None:
             floor = self.world.floor_for(self.x)
@@ -1276,12 +1501,42 @@ class Cat(Gtk.Window):
             self.vx = self.vy = 0.0
             self.set_state("land", 0.2)
 
+    def _drop_height(self):
+        seg = self.world.landing(self.x, self.y, 10 ** 6) or self.world.floor_for(self.x)
+        return (seg.y - self.y) if seg is not None else 0
+
+    def _open_chute(self):
+        img = sprites.render(sprites.PARTS["PARACHUTE"], self.pet.coat, self.scale)
+        self.chute = Overlay(img)
+        self._place_chute()
+        self.chute.show()
+        self.raise_all()
+
+    def _place_chute(self):
+        c = self.chute
+        # the harness hangs just above her head (the "dangle" frame's head starts at row 1)
+        head_top = self.y - self.S + (self.S - sprites.H * self.scale) + 1 * self.scale
+        c.place(self.x - c.w / 2, head_top - c.h + 2 * self.scale)
+
+    def _close_chute(self):
+        c, self.chute = self.chute, None
+        if c.pos is not None:
+            # it folds down and fades away
+            Floater(c.surface, c.pos[0] + c.w / 2, c.pos[1] + c.h, rise=-14 * self.scale, life=0.5)
+        c.destroy()
+
     def _st_land(self, dt):
         self._show("crouch0")
         if self.t > self.length:
-            self.set_state("stand", random.uniform(0.5, 1.5))
+            if self.route is not None:
+                self._next_hop()
+            else:
+                self.set_state("stand", random.uniform(0.5, 1.5))
 
     def _st_climb(self, dt):
+        if "onto" in self.data:
+            self._climb_window(dt)
+            return
         speed = 45 * self.scale / 2
         self.y -= speed * dt
         self.data["dist"] += speed * dt
@@ -1416,7 +1671,7 @@ class Cat(Gtk.Window):
     def _ambient(self, dt):
         now = time.monotonic()
         p = self.pet
-        if self.state not in CALM or not self.on_ground() or self.props:
+        if self.state not in CALM or not self.on_ground() or self.props or self.route is not None:
             return
 
         def ready(name, seconds):
@@ -1471,6 +1726,9 @@ class Cat(Gtk.Window):
         if self.press is not None:
             if self.state != "held":
                 if math.hypot(event.x_root - self.press[0], event.y_root - self.press[1]) > 6:
+                    if self.bed is not None:
+                        self.wake_up()
+                    self.route = None
                     self.orient = GROUND
                     self.seg = None
                     self.petting_since = None
@@ -1530,6 +1788,10 @@ class Cat(Gtk.Window):
         elif what == "bored":
             self.pet.fun = 15
             self.cooldowns.pop("bored", None)
+        elif what == "bed":
+            self.send_to_bed()
+        elif what == "wake":
+            self.wake_up()
         elif what == "vibe":
             self.set_state("vibe", 20)
         elif what == "sad":
@@ -1565,6 +1827,15 @@ class Cat(Gtk.Window):
         if self.state == "sleep":
             self.set_state("yawn", 1.0)
             return
+        if self.state == "bed":
+            if now - self.data.get("last_heart", 0) > 0.8:
+                self.data["last_heart"] = now
+                self.heart()
+                self.pet.add(affection=2)
+            if now - self.data.get("last_purr", 0) > 2.5:
+                self.data["last_purr"] = now
+                self.app.sounds.play("purr")
+            return
         if self.petting_since is None:
             self.petting_since = now
         if now - self.petting_since > 12:
@@ -1588,7 +1859,7 @@ class Cat(Gtk.Window):
             self.app.sounds.play("purr")
 
     def clicked(self):
-        if self.state == "sleep":
+        if self.state in ("sleep", "bed"):
             self.heart()
             return
         self.heart()
@@ -1599,17 +1870,262 @@ class Cat(Gtk.Window):
     def call(self):
         if self.state == "held":
             return
+        if self.bed is not None:
+            self.wake_up()
         px, py = pointer()
-        if self.on_ground() and abs(py - self.y) < 90 and self.seg.x1 <= px <= self.seg.x2 \
-                and abs(px - self.x) < 900:
-            self.set_state("come", 0, dist=0.0)
+        goal = self.world.landing(px, py - 2, 10 ** 6) or self.world.floor_for(px)
+        if not self.on_ground() or goal is None:
+            self._pop_to_pointer()
             return
+        self.go_to(goal, px, then=self.arrived, fail=self._pop_to_pointer)
+
+    def _pop_to_pointer(self):
+        px, py = pointer()
+        self.route = None
         self.poof()
         self.orient = GROUND
         self.x, self.y = float(px), float(py - 4)
         self.poof()
         self.fall()
         GLib.timeout_add(900, lambda: (self.arrived() if self.on_ground() else None) and False)
+
+    # ---------------------------------------------------------------- finding a way over the windows
+    def _hop(self, a, b):
+        """Where to jump from surface a to land on surface b, or None if it's too far."""
+        if b.x2 - b.x1 < 44 or a.x2 - a.x1 < 30:
+            return None
+        dy = b.y - a.y
+        if dy < -230:
+            return None
+        if b.x2 <= a.x1 + 12:
+            tx, lx = a.x1 + 12, b.x2 - 18
+        elif b.x1 >= a.x2 - 12:
+            tx, lx = a.x2 - 12, b.x1 + 18
+        else:
+            lo, hi = max(a.x1 + 12, b.x1 + 18), min(a.x2 - 12, b.x2 - 18)
+            if lo > hi:
+                return None
+            tx = lx = (lo + hi) / 2
+        if abs(lx - tx) > 320 + max(0, dy) * 0.3:
+            return None
+        return tx, lx
+
+    def _climb_hop(self, a, b):
+        """Climb up the side of window b from surface a (when it's too high to jump)."""
+        if b.kind != "win" or a.y <= b.y + 40 or a.y - (b.y + b.win_h) > 200:
+            return None
+        for side in ("left", "right"):
+            wall = b.win_x if side == "left" else b.win_x + b.win_w
+            stand = wall - 8 if side == "left" else wall + 8
+            land = wall + 16 if side == "left" else wall - 16
+            if a.x1 + 6 <= stand <= a.x2 - 6 and b.x1 <= land <= b.x2:
+                return stand, land, side
+        return None
+
+    def _start_window_climb(self, key, side):
+        seg, same = self.world.find(key, 0)
+        seg = seg or (same[0] if same else None)
+        if seg is None:
+            self._next_hop()
+            return
+        wall = seg.win_x if side == "left" else seg.win_x + seg.win_w
+        bottom = seg.y + seg.win_h
+        self.facing = 1 if side == "left" else -1
+        middle = self.y - self.S / 2
+        if middle > bottom - 10:
+            # the window ends above her: jump up to its side first
+            self.set_state("crouch_jump", 0.25, x0=self.x, y0=self.y, x1=float(wall), y1=bottom - 10 + self.S / 2,
+                           key=None, T=0.45, H=20.0, pounce=False, climb=(key, side))
+            return
+        self.seg = None
+        self.orient = RIGHT_WALL if side == "left" else LEFT_WALL
+        self.x, self.y = float(wall), middle
+        self.set_state("climb", 0, dist=0.0, onto=(key, side))
+
+    def _climb_window(self, dt):
+        key, side = self.data["onto"]
+        same = [t for t in self.world.segments if t.key == key]
+        if not same:
+            self.fall()
+            return
+        top = same[0]
+        wall = top.win_x if side == "left" else top.win_x + top.win_w
+        self.x = float(wall)
+        speed = 70 * self.scale / 2
+        self.y -= speed * dt
+        self.data["dist"] += speed * dt
+        self._show(self._walk_frame(), flip=(self.orient == LEFT_WALL))
+        if self.y - self.S / 2 <= top.y:
+            land = wall + 16 if side == "left" else wall - 16
+            seg, pieces = self.world.find(key, land)
+            seg = seg or (min(pieces, key=lambda t: abs((t.x1 + t.x2) / 2 - land)) if pieces else None)
+            if seg is None:
+                self.fall()
+                return
+            self.orient = GROUND
+            self.seg = seg
+            self.x = float(clamp(land, seg.x1 + 8, seg.x2 - 8))
+            self.y = float(seg.y)
+            self.facing = 1 if side == "left" else -1
+            self.set_state("land", 0.2)
+
+    def _plan(self, goal):
+        """The cheapest chain of jumps and climbs from where she is to the goal surface
+        (Dijkstra; walking, jumping and climbing all cost something)."""
+        segs = [t for t in self.world.segments if t.x2 - t.x1 >= 44]
+        start = self.seg
+        ident = lambda t: (t.key, t.x1, t.x2)
+        if ident(start) == ident(goal):
+            return []
+        best = {ident(start): 0.0}
+        count = itertools.count()
+        heap = [(0.0, next(count), start, self.x, [])]
+        while heap:
+            cost, _n, a, ax, path = heapq.heappop(heap)
+            if ident(a) == ident(goal):
+                return path
+            if len(path) >= 7 or cost > best.get(ident(a), float("inf")):
+                continue
+            for b in segs:
+                if ident(b) == ident(a):
+                    continue
+                hop = self._hop(a, b)
+                if hop is not None:
+                    tx, lx = hop
+                    step = ("jump", tx, lx, b)
+                    c = cost + abs(tx - ax) + 80 + abs(lx - tx) * 0.5
+                else:
+                    climb = self._climb_hop(a, b)
+                    if climb is None:
+                        continue
+                    tx, lx, side = climb
+                    step = ("climb", tx, side, b)
+                    c = cost + abs(tx - ax) + 60 + (a.y - b.y)
+                if c >= best.get(ident(b), float("inf")):
+                    continue
+                best[ident(b)] = c
+                heapq.heappush(heap, (c, next(count), b, lx, path + [step]))
+        return None
+
+    def go_to(self, seg, x, then, fail):
+        self.route = {"key": seg.key, "x": x, "then": then, "fail": fail, "hops": 0,
+                      "since": time.monotonic()}
+        self._next_hop()
+
+    def _next_hop(self):
+        r = self.route
+        if r is None:
+            return
+        if not self.on_ground() or r["hops"] > 10 or time.monotonic() - r["since"] > 25:
+            self.route = None
+            r["fail"]()
+            return
+        goal, same = self.world.find(r["key"], r["x"])
+        goal = goal or (same[0] if same else None)
+        if goal is None:
+            self.route = None
+            r["fail"]()
+            return
+        path = self._plan(goal)
+        if path is None:
+            self.route = None
+            r["fail"]()
+            return
+        if not path:
+            self.route = None
+            self.walk_to(clamp(r["x"], self.seg.x1 + 10, self.seg.x2 - 10), run=True, then=r["then"])
+            return
+        kind, tx, lx, target = path[0]
+        r["hops"] += 1
+        key = target.key
+        if kind == "climb":
+            side = lx
+            self.walk_to(tx, run=True, then=lambda: self._start_window_climb(key, side))
+            return
+
+        def takeoff():
+            seg, same_ = self.world.find(key, lx)
+            seg = seg or (same_[0] if same_ else None)
+            if seg is None:
+                self._next_hop()
+                return
+            self.jump_to(clamp(lx, seg.x1 + 12, seg.x2 - 12), seg.y, key)
+        self.walk_to(tx, run=True, then=takeoff)
+
+    # ---------------------------------------------------------------- bedtime
+    def send_to_bed(self):
+        if self.bed is not None or self.state == "held":
+            return
+        self.pet.in_bed = True
+        self.pet.wake_at = next_morning() if night() else time.time() + 45 * 60
+        self.poof()
+        self.pajamas = True
+        floor = self.world.floor_for(self.x)
+        margin = 30 * self.scale
+        bx = clamp(self.x, floor.x1 + margin, floor.x2 - margin)
+        self._make_bed(bx)
+        self.app.sounds.play("mrrp")
+        if self.on_ground():
+            self.go_to(floor, bx, then=self._get_in_bed, fail=self._pop_into_bed)
+        else:
+            self._pop_into_bed()
+
+    def _make_bed(self, bx):
+        floor = self.world.floor_for(bx)
+        back = Overlay(sprites.render(sprites.PARTS["BED"], self.pet.coat, self.scale))
+        front = Overlay(sprites.render(sprites.PARTS["BED_FRONT"], self.pet.coat, self.scale))
+        back.place(bx - back.w / 2, floor.y - back.h)
+        front.place(bx - front.w / 2, floor.y - front.h)
+        back.show()
+        front.show()
+        self.bed = (back, front, bx)
+        self.raise_all()
+
+    def _pop_into_bed(self):
+        self.route = None
+        self.poof()
+        self._get_in_bed()
+        self.poof()
+
+    def _get_in_bed(self):
+        if self.bed is None:
+            self.decide()
+            return
+        bx = self.bed[2]
+        floor = self.world.floor_for(bx)
+        self.orient = GROUND
+        self.seg = floor
+        self.x = float(bx)
+        self.y = float(floor.y - 2 * self.scale)
+        self.set_state("bed")
+        self.raise_all()
+
+    def _st_bed(self, dt):
+        self._show("sleep0" if int(self.anim / 1.5) % 2 == 0 else "sleep1")
+        if self.anim % 3.6 < dt:
+            self.zzz()
+        if time.time() >= self.pet.wake_at:
+            self.wake_up()
+
+    def _remove_bed(self):
+        if self.bed is not None:
+            back, front, bx = self.bed
+            self.bed = None
+            self.poof(bx, back.pos[1] + back.h if back.pos else None)
+            back.destroy()
+            front.destroy()
+
+    def wake_up(self):
+        was_in_bed = self.state == "bed"
+        self._remove_bed()
+        if self.pajamas:
+            self.poof()
+        self.pajamas = False
+        self.pet.in_bed = False
+        self.route = None
+        if was_in_bed and self.seg is not None:
+            self.y = float(self.seg.y)
+            self.set_state("yawn", 1.3)
 
     def give_treat(self):
         if not self.on_ground():
@@ -1880,7 +2396,16 @@ class PixelCatApp(Gtk.Application):
         item("Give a treat" + ("  (she's hungry!)" if pet.fullness < 30 else ""), lambda: self.cat.give_treat())
         item("Play with yarn" + ("  (she's bored!)" if pet.fun < 25 else ""), lambda: self.cat.play_yarn())
         item(f"Call her here" + (f"  ({self.shortcut})" if self.shortcut else ""), lambda: self.cat.call())
+        if self.cat.bed is not None:
+            item("Wake her up", lambda: self.cat.wake_up())
+        else:
+            item("Send her to bed" + ("  (it's late!)" if night() else ""), lambda: self.cat.send_to_bed())
         menu.append(Gtk.SeparatorMenuItem())
+        explore = Gtk.CheckMenuItem(label="Explore inside windows")
+        explore.set_active(pet.explore)
+        explore.set_tooltip_text("Sit on text boxes, chat bubbles, progress bars and other lines inside windows")
+        explore.connect("toggled", lambda w: (setattr(pet, "explore", w.get_active()), pet.save()))
+        menu.append(explore)
         sounds = Gtk.CheckMenuItem(label="Sounds")
         sounds.set_active(not pet.muted)
         sounds.connect("toggled", lambda w: (setattr(pet, "muted", not w.get_active()), pet.save()))
