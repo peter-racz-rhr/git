@@ -563,7 +563,11 @@ class ShelfWindow(Gtk.ApplicationWindow):
 
     def update_state(self):
         count = len(self.store)
-        self.stack.set_visible_child_name("items" if count else "empty")
+        page = "items" if count else "empty"
+        # a Gtk.Stack ignores switching to a page that isn't shown yet (the shelf
+        # starts hidden at login), so make sure it is
+        self.stack.get_child_by_name(page).show_all()
+        self.stack.set_visible_child_name(page)
         self.drag_all_button.set_sensitive(count > 0)
         self.drag_all_button.set_label(f"Drag all ({count})" if count else "Drag all")
         self.title_label.set_text("Drop Shelf" if not count else
