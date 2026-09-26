@@ -11,6 +11,7 @@ Usage:
     mail-brief --check    check for new emails now
     mail-brief --toggle   show or hide the line
     mail-brief --quit     close it
+    mail-brief --diagnose check the Gmail login, the search and the Groq key step by step
 """
 
 import datetime
@@ -187,8 +188,10 @@ def parse_message(raw):
 # --------------------------------------------------------------------------
 
 class Gmail:
-    FETCH_RE = re.compile(rb"UID (\d+).*?X-GM-MSGID (\d+).*?X-GM-THRID (\d+)|"
-                          rb"X-GM-MSGID (\d+).*?X-GM-THRID (\d+).*?UID (\d+)", re.S)
+    # Gmail may list the fields of a FETCH answer in any order, so look for each one separately.
+    UID_RE = re.compile(rb"\bUID (\d+)")
+    MSGID_RE = re.compile(rb"X-GM-MSGID (\d+)")
+    THRID_RE = re.compile(rb"X-GM-THRID (\d+)")
 
     def __init__(self, address, app_password):
         self.address = address
@@ -210,12 +213,10 @@ class Gmail:
 
     @classmethod
     def _ids(cls, header):
-        m = cls.FETCH_RE.search(header)
-        if not m:
+        uid, msgid, thread = cls.UID_RE.search(header), cls.MSGID_RE.search(header), cls.THRID_RE.search(header)
+        if not (uid and msgid and thread):
             return None
-        if m.group(1):
-            return m.group(1).decode(), m.group(2).decode(), int(m.group(3))
-        return m.group(6).decode(), m.group(4).decode(), int(m.group(5))
+        return uid.group(1).decode(), msgid.group(1).decode(), int(thread.group(1))
 
     def unread(self, known):
         """Returns (list of all unread message ids, dict of newly downloaded messages)."""
@@ -1033,10 +1034,60 @@ class MailBriefApp(Gtk.Application):
         return 0
 
 
+def diagnose():
+    """Step-by-step check of the Gmail login, the search and the Groq key (prints, no window)."""
+    settings = Settings()
+    address = settings.get("address", "")
+    print(f"1. Settings: address={'set' if address else 'MISSING'}, "
+          f"app password={'set' if settings.secrets.get('app_password') else 'MISSING'}, "
+          f"Groq key={'set' if settings.secrets.get('groq_key') else 'MISSING'}")
+    gmail = Gmail(address, settings.secrets.get("app_password", ""))
+    try:
+        conn = gmail._connect()
+    except Exception as e:
+        print(f"2. Gmail login: FAILED - {e}")
+        return 1
+    print("2. Gmail login: ok")
+    try:
+        try:
+            typ, data = conn.uid("SEARCH", "X-GM-RAW", f'"{GMAIL_QUERY}"')
+            uids = data[0].split() if typ == "OK" and data and data[0] else []
+            print(f"3. Unread emails found by the search: {len(uids)}  ({typ})")
+        except Exception as e:
+            print(f"3. Search: FAILED - {e}")
+            uids = []
+        try:
+            typ, data = conn.uid("SEARCH", "UNSEEN")
+            print(f"   (all unread in the inbox, without filters: {len(data[0].split()) if data and data[0] else 0})")
+        except Exception as e:
+            print(f"   (could not count all unread: {e})")
+        if uids:
+            typ, data = conn.uid("FETCH", uids[-1].decode(), "(X-GM-MSGID X-GM-THRID)")
+            header = data[0][0] if data and isinstance(data[0], tuple) else (data[0] if data else b"")
+            print(f"4. Answer for the newest one: {header!r}")
+            print(f"   understood as: {Gmail._ids(header or b'')}")
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+    try:
+        result = Summarizer(settings.secrets.get("groq_key", ""), settings.get("model", DEFAULT_MODEL)).summarize(
+            {"sender": "Test", "address": "test@example.com", "date": time.time(), "subject": "Test",
+             "body": "Hi! The math test moves to next Monday. Please bring a calculator."})
+        print(f"5. Groq: ok - {result['summary']}")
+    except Exception as e:
+        print(f"5. Groq: FAILED - {e}")
+        return 1
+    return 0
+
+
 def main():
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)
         return 0
+    if "--diagnose" in sys.argv:
+        return diagnose()
     return MailBriefApp().run(sys.argv)
 
 

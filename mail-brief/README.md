@@ -70,4 +70,7 @@ Press **Save & check now**. After a few seconds the line shows your emails.
 Menu (three lines) > **Settings**: address, app password, Groq key, the AI model
 (`llama-3.3-70b-versatile` by default) and how often to check.
 
+If something does not work, run `mail-brief --diagnose` in a terminal: it checks the Gmail
+login, the search and the Groq key step by step and says where it fails.
+
 Uninstall with `./uninstall.sh` (`--forget` also deletes settings and summaries).
