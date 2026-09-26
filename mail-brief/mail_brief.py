@@ -78,11 +78,12 @@ email's language (e.g. "Reply to confirm attendance"); otherwise null.
 (look weekday words up in the calendar above); otherwise null.
 - "deadline_note": a few words saying what the deadline is for, in the email's language; \
 otherwise null.
-- "summary": the summary, written in the SAME LANGUAGE as the email. Make it as short as \
-possible WITHOUT losing information: keep every date, time, place, name, number, link \
-purpose and request. Write dates exactly the way the email does (if it says "next \
-Monday", write "next Monday" - never add a date the email doesn't state). One short sentence \
-for simple emails, a few for dense ones. No greeting, no "This email says".
+- "summary": the summary, written in the SAME LANGUAGE as the email. 2-3 clear sentences \
+for a normal email (up to 5 for long, dense ones; one is enough for a trivial one). Keep \
+every date, time, place, name, number, link purpose and request, and say what the email is \
+about and what is expected. Write dates exactly the way the email does (if it says "next \
+Monday", write "next Monday" - never add a date the email doesn't state). No greeting, no \
+"This email says".
 
 Answer with the JSON object only."""
 
@@ -90,6 +91,87 @@ Answer with the JSON object only."""
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+
+BROWSERS = [
+    ("google-chrome.desktop", "Google Chrome"),
+    ("com.google.Chrome.desktop", "Google Chrome (Flatpak)"),
+    ("chromium.desktop", "Chromium"),
+    ("chromium-browser.desktop", "Chromium"),
+    ("org.chromium.Chromium.desktop", "Chromium (Flatpak)"),
+    ("brave-browser.desktop", "Brave"),
+    ("firefox.desktop", "Firefox"),
+    ("org.mozilla.firefox.desktop", "Firefox (Flatpak)"),
+]
+CHROME_IDS = [b for b, _ in BROWSERS[:5]]
+CALENDAR_APPS = ["org.gnome.Calendar.desktop", "gnome-calendar.desktop",
+                 "org.kde.korganizer.desktop", "thunderbird.desktop"]
+
+
+def desktop_app(desktop_id):
+    try:
+        return Gio.DesktopAppInfo.new(desktop_id)
+    except TypeError:
+        return None
+
+
+def installed_browsers():
+    return [(bid, name) for bid, name in BROWSERS if desktop_app(bid)]
+
+
+def preferred_browser(settings):
+    """The browser to open emails in: the chosen one, else Chrome/Chromium if installed."""
+    choice = settings.get("browser")
+    if choice == "default":
+        return None
+    if choice and desktop_app(choice):
+        return choice
+    return next((b for b in CHROME_IDS if desktop_app(b)), None)
+
+
+def _ics_text(text):
+    return (text or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def _ics_fold(line):
+    """Calendar files want lines of at most 75 bytes; longer ones continue after a space."""
+    out, current, size = [], "", 0
+    for char in line:
+        width = len(char.encode())
+        if size + width > 73:
+            out.append(current)
+            current, size = " ", 1
+        current += char
+        size += width
+    out.append(current)
+    return "\r\n".join(out)
+
+
+def make_ics(uid, entry, link):
+    day = datetime.date.fromisoformat(entry["deadline"])
+    title = entry.get("deadline_note") or entry["subject"]
+    details = [entry.get("summary") or ""]
+    if entry.get("action"):
+        details.append(f"To do: {entry['action']}")
+    details.append(f"From: {entry['sender']} - {entry['subject']}")
+    details.append(link)
+    stamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Mail Brief//EN", "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT",
+        f"UID:{uid}@mail-brief",
+        f"DTSTAMP:{stamp}",
+        f"DTSTART;VALUE=DATE:{day.strftime('%Y%m%d')}",
+        f"DTEND;VALUE=DATE:{(day + datetime.timedelta(days=1)).strftime('%Y%m%d')}",
+        f"SUMMARY:{_ics_text('Deadline: ' + title)}",
+        f"DESCRIPTION:{_ics_text(chr(10).join(details))}",
+        f"URL:{link}",
+        "BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_ics_text('Deadline tomorrow: ' + title)}",
+        "TRIGGER:-PT15H",                      # 9:00 the day before
+        "END:VALARM",
+        "END:VEVENT", "END:VCALENDAR",
+    ]
+    return "\r\n".join(_ics_fold(line) for line in lines) + "\r\n"
+
 
 def system_prompt():
     """The instructions, with today's weekday and a 3-week calendar so dates come out right."""
@@ -751,7 +833,16 @@ class MailWindow(Gtk.ApplicationWindow):
         done_button = Gtk.Button(label="Done")
         done_button.set_tooltip_text("Hide it here (it stays unread in Gmail)")
         done_button.connect("clicked", lambda *_: self.mark_done(msgid))
-        for b in (open_button, read_button, done_button):
+        row_buttons = [open_button]
+        if entry.get("deadline"):
+            added = entry.get("in_calendar")
+            cal_button = Gtk.Button(label="In calendar \u2713" if added else "Add to calendar")
+            cal_button.set_tooltip_text("Add the deadline to your calendar app (click Import there)"
+                                        + (" - again" if added else ""))
+            cal_button.connect("clicked", lambda *_: self.add_to_calendar(msgid))
+            row_buttons.append(cal_button)
+        row_buttons += [read_button, done_button]
+        for b in row_buttons:
             b.set_can_focus(False)
             buttons.pack_start(b, False, False, 0)
         box.pack_start(buttons, False, False, 0)
@@ -809,7 +900,8 @@ class MailWindow(Gtk.ApplicationWindow):
 
     def _show_menu(self, anchor):
         menu = Gtk.Menu()
-        for label, callback in (("Check now", self.check), ("Settings…", self.open_settings),
+        for label, callback in (("Check now", self.check), ("Summarize again (new style)", self.resummarize),
+                                ("Settings…", self.open_settings),
                                 ("Show hidden (done) emails again", self.unhide_all), ("Quit", self.app.quit)):
             item = Gtk.MenuItem(label=label)
             item.connect("activate", lambda _i, cb=callback: cb())
@@ -825,8 +917,12 @@ class MailWindow(Gtk.ApplicationWindow):
     def open_mail(self, msgid):
         entry = self.cache.get(msgid, {})
         url = self.gmail().link(entry.get("thread", 0))
+        browser = preferred_browser(self.settings)
         try:
-            Gio.AppInfo.launch_default_for_uri(url, None)
+            if browser:
+                desktop_app(browser).launch_uris([url], None)
+            else:
+                Gio.AppInfo.launch_default_for_uri(url, None)
         except GLib.Error as e:
             self.set_status(f"could not open the browser: {e.message}", in_line=True)
             print(f"mail-brief: open {url} failed: {e.message}", file=sys.stderr)
@@ -853,6 +949,37 @@ class MailWindow(Gtk.ApplicationWindow):
             self.cache[msgid]["done"] = True
             self.save_cache()
         self.refresh_ui()
+
+    def add_to_calendar(self, msgid):
+        entry = self.cache.get(msgid)
+        if not entry or not entry.get("deadline"):
+            return
+        folder = os.path.join(DATA_DIR, "events")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"deadline-{msgid}.ics")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(make_ics(msgid, entry, self.gmail().link(entry.get("thread", 0))))
+        app = next((a for a in (desktop_app(c) for c in CALENDAR_APPS) if a), None) \
+            or Gio.AppInfo.get_default_for_type("text/calendar", False)
+        if app is None:
+            self.set_status(f"no calendar app found - the event file is {path}", in_line=True)
+            return
+        try:
+            app.launch_uris([Gio.File.new_for_path(path).get_uri()], None)
+        except GLib.Error as e:
+            self.set_status(f"could not open the calendar: {e.message}", in_line=True)
+            return
+        entry["in_calendar"] = True
+        self.save_cache()
+        self.refresh_ui()
+        self.set_status("calendar opened - click Import there to add the deadline")
+
+    def resummarize(self):
+        """Write the summaries of the current emails again (e.g. after the summary style changed)."""
+        for msgid in self.current:
+            if msgid in self.cache:
+                self.cache[msgid].pop("summary", None)
+        self.check()
 
     def unhide_all(self):
         for entry in self.cache.values():
@@ -934,10 +1061,13 @@ class MailWindow(Gtk.ApplicationWindow):
             fresh = []
             for msgid, entry in summaries.items():
                 entry.pop("body", None)          # the text itself is not stored
+                old = self.cache.get(msgid, {})
                 entry["unread"] = True
-                entry["done"] = False
+                entry["done"] = old.get("done", False)
+                entry["in_calendar"] = old.get("in_calendar", False)
+                if not old:
+                    fresh.append(msgid)
                 self.cache[msgid] = entry
-                fresh.append(msgid)
             self.current = [m for m in unread if m in self.cache]
             self.save_cache()
             stamp = datetime.datetime.now().strftime("%H:%M")
@@ -1030,6 +1160,18 @@ class MailWindow(Gtk.ApplicationWindow):
         interval = Gtk.SpinButton.new_with_range(10, 720, 10)
         interval.set_value(self.settings.get_int("interval_minutes", 60) or 60)
         grid.attach(interval, 1, 4, 1, 1)
+        grid.attach(Gtk.Label(label="Open emails in", xalign=1), 0, 5, 1, 1)
+        browser = Gtk.ComboBoxText()
+        browser.append("default", "System default browser")
+        seen = set()
+        for bid, name in installed_browsers():
+            if name not in seen:
+                browser.append(bid, name)
+                seen.add(name)
+        browser.set_active_id(preferred_browser(self.settings) or "default")
+        if browser.get_active_id() is None:
+            browser.set_active_id("default")
+        grid.attach(browser, 1, 5, 1, 1)
 
         note = Gtk.Label(xalign=0)
         note.set_line_wrap(True)
@@ -1049,6 +1191,7 @@ class MailWindow(Gtk.ApplicationWindow):
             self.settings.set("address", address.get_text().strip())
             self.settings.set("model", model.get_active_text() or DEFAULT_MODEL)
             self.settings.set("interval_minutes", int(interval.get_value()))
+            self.settings.set("browser", browser.get_active_id() or "default")
             self.settings.set_secret("app_password", password.get_text().strip())
             self.settings.set_secret("groq_key", key.get_text().strip())
             if int(interval.get_value()) != old_minutes:

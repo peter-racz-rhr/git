@@ -11,7 +11,9 @@ Click it and it opens into a list of your unread emails. Each one shows:
 - a very short AI summary, in the email's own language, that keeps every date, place,
   name and request
 - **To do:** what you have to do, if anything, and the **deadline** with a countdown
-- **Open** (opens the email in Gmail), **Mark read**, **Done** (hides it here)
+- **Open** (opens the email in Gmail - in Chrome if it is installed, or the browser you pick
+  in Settings), **Add to calendar** (for emails with a deadline), **Mark read**, **Done**
+  (hides it here)
 
 It checks every hour (plus the refresh button) and pops up a notification when new
 mail arrives. Gmail's Promotions and Social tabs (ads, social network notifications)
@@ -54,6 +56,18 @@ requirement, so a parent may need to create it.
 3. Paste it into the settings window.
 
 Press **Save & check now**. After a few seconds the line shows your emails.
+
+## Deadlines in your calendar
+
+**Add to calendar** creates an all-day event on the deadline day (with the summary, the
+to-do and a link to the email, plus a reminder at 9:00 the day before) and opens it in your
+calendar app. Click **Import** there to add it. The button then shows **In calendar**.
+
+## Summaries
+
+Summaries are 2-3 sentences (more for dense emails), in the email's language. After an
+update that changes the summary style, use menu > **Summarize again** to rewrite the current
+ones.
 
 ## Privacy
 
