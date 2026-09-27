@@ -532,21 +532,48 @@ class World:
             return struct.unpack("=4l", raw[:16])
         return (0, 0, 0, 0)
 
-    def refresh(self):
+    @staticmethod
+    def _read_monitors():
+        """[(geometry, workarea)] for every screen. PIXEL_CAT_MONITORS="x,y,w,h,wx,wy,ww,wh;..."
+        pretends there are other screens (for testing on one screen)."""
+        fake = os.environ.get("PIXEL_CAT_MONITORS")
+        if fake:
+            def rect(x, y, w, h):
+                r = Gdk.Rectangle()
+                r.x, r.y, r.width, r.height = x, y, w, h
+                return r
+            out = []
+            for part in fake.split(";"):
+                v = [int(n) for n in part.split(",")]
+                out.append((rect(*v[:4]), rect(*v[4:8])))
+            return out
         display = Gdk.Display.get_default()
-        self.monitors = []
+        return [(display.get_monitor(i).get_geometry(), display.get_monitor(i).get_workarea())
+                for i in range(display.get_n_monitors())]
+
+    def refresh(self):
+        self.monitors = self._read_monitors()
         segs = []
         x0 = y0 = 10 ** 9
         x1 = y1 = -10 ** 9
-        for i in range(display.get_n_monitors()):
-            m = display.get_monitor(i)
-            geo, area = m.get_geometry(), m.get_workarea()
-            self.monitors.append((geo, area))
-            segs.append(Seg(("floor", i), area.y + area.height, geo.x, geo.x + geo.width))
+        floors = []
+        for i, (geo, area) in enumerate(self.monitors):
+            floors.append([area.y + area.height, geo.x, geo.x + geo.width, i])
             x0, y0 = min(x0, geo.x), min(y0, geo.y)
             x1, y1 = max(x1, geo.x + geo.width), max(y1, geo.y + geo.height)
+        # screens side by side with the bottom at the same height: one floor she can walk across
+        floors.sort(key=lambda f: f[1])
+        merged = []
+        for f in floors:
+            if merged and merged[-1][0] == f[0] and abs(merged[-1][2] - f[1]) <= 1:
+                merged[-1][2] = f[2]
+            else:
+                merged.append(f)
+        for y, a, b, i in merged:
+            segs.append(Seg(("floor", i), y, a, b))
         self.bounds = (x0, y0, x1, y1)
         self.fullscreen = False
+        self.fullscreen_rects = []
         if self.screen is not None:
             self.screen.force_update()
             workspace = self.screen.get_active_workspace()
@@ -568,6 +595,8 @@ class World:
             active = self.screen.get_active_window()
             self.fullscreen = bool(active is not None and active.get_pid() != own and active.is_fullscreen()
                                    and not active.is_minimized())
+            self.fullscreen_rects = [(x, y, width, height) for w, x, y, width, height in usable
+                                     if w.is_fullscreen()]
             self.stacking = tuple(u[0].get_xid() for u in usable)
             self.windows = [(u[0].get_xid(), u[1], u[2], u[3], u[4]) for u in usable]
             for index, (w, x, y, width, height) in enumerate(usable):
@@ -723,7 +752,26 @@ class World:
         for geo, area in self.monitors:
             if geo.x <= x < geo.x + geo.width and geo.y <= y < geo.y + geo.height:
                 return geo, area
-        return self.monitors[0] if self.monitors else (None, None)
+        # between screens: the nearest one
+        best = None
+        for geo, area in self.monitors:
+            dx = max(geo.x - x, 0, x - (geo.x + geo.width))
+            dy = max(geo.y - y, 0, y - (geo.y + geo.height))
+            if best is None or dx + dy < best[0]:
+                best = (dx + dy, geo, area)
+        return (best[1], best[2]) if best else (None, None)
+
+    def covered(self, x, y):
+        """Is this spot under a fullscreen window?"""
+        return any(fx <= x < fx + fw and fy <= y < fy + fh for fx, fy, fw, fh in self.fullscreen_rects)
+
+    def free_monitor(self):
+        """A screen with no fullscreen window on it, or None."""
+        for geo, area in self.monitors:
+            cx, cy = geo.x + geo.width / 2, geo.y + geo.height / 2
+            if not self.covered(cx, cy):
+                return geo, area
+        return None
 
     def floor_for(self, x):
         best = None
@@ -1579,12 +1627,28 @@ class Cat(Gtk.Window):
             self.world.ledges = {}
         self.world.refresh()
         extras = self._extras()
-        if self.world.fullscreen and not self.hidden:
+        covered = self.world.covered(self.x, self.y - self.S / 2)
+        if covered and len(self.world.monitors) > 1 and self.bed is None and self.state not in ("held",):
+            free = self.world.free_monitor()
+            if free is not None:
+                # fullscreen on her screen: she slips over to the other one instead of hiding
+                geo, area = free
+                floor = self.world.floor_for(area.x + area.width / 2)
+                self._close_gadgets()
+                self.route = None
+                self.orient = GROUND
+                self.seg = floor
+                self.x = float(clamp(area.x + area.width / 2, floor.x1 + 10, floor.x2 - 10))
+                self.y = float(floor.y)
+                self.set_state("sit", random.uniform(3, 6))
+                self._place()
+                covered = False
+        if covered and not self.hidden:
             self.hidden = True
             self.hide()
             for w in extras:
                 w.hide()
-        elif not self.world.fullscreen and self.hidden:
+        elif not covered and self.hidden:
             self.hidden = False
             self.show()
             for w in extras:
@@ -2139,7 +2203,8 @@ class Cat(Gtk.Window):
 
     def _st_ceiling(self, dt):
         speed = 40 * self.scale / 2
-        x0, _y0, x1, _y1 = self.world.bounds
+        geo, _area = self.world.monitor_at(self.x, self.y + 1)
+        x0, x1 = (geo.x, geo.x + geo.width) if geo is not None else self.world.bounds[::2]
         target = clamp(self.data["target"], x0 + self.S, x1 - self.S)
         step = min(speed * dt, abs(target - self.x))
         self.x += step * (1 if target > self.x else -1)
@@ -2384,6 +2449,8 @@ class Cat(Gtk.Window):
             self.open_portal(goal, px, self.arrived)
         elif what == "diary":
             self.app.show_diary()
+        elif what == "other":
+            self.other_screen()
         elif what == "laser":
             self.toggle_laser()
         elif what == "box":
@@ -2738,9 +2805,9 @@ class Cat(Gtk.Window):
 
     def spawn_butterfly(self):
         self.pet.count("butterflies")
-        x0, _y0, x1, _y1 = self.world.bounds
+        geo, _area = self.world.monitor_at(self.x, self.y - 1)
         side = random.choice((-1, 1))
-        start = (x0 - 20) if side < 0 else (x1 + 20)
+        start = (geo.x - 20) if side < 0 else (geo.x + geo.width + 20)
         self.butterfly = Butterfly(self.scale, start, self.y - random.uniform(120, 220))
         self.raise_all()
 
@@ -2857,9 +2924,9 @@ class Cat(Gtk.Window):
         if not self.idle_mode and idle > 3 * 60 and self.bed is None and self.state in CALM \
                 and self.on_ground() and self.route is None and self.laser is None:
             self.idle_mode = True
-            floor = max((t for t in self.world.segments if t.kind == "floor"),
-                        key=lambda t: t.x2 - t.x1)
-            middle = (floor.x1 + floor.x2) / 2
+            _geo, area = self.world.monitor_at(*pointer())
+            middle = area.x + area.width / 2
+            floor = self.world.floor_for(middle)
             self.go_to(floor, middle, then=lambda: self.set_state("sleep", 4 * 3600), fail=self.decide)
         elif self.idle_mode and idle < 2:
             self.idle_mode = False
@@ -3021,6 +3088,30 @@ class Cat(Gtk.Window):
             if box:
                 GLib.timeout_add(2500, lambda: (self.poof(box[2], box[1].pos[1] + box[1].h - 4 * self.scale),
                                                 box[0].destroy(), box[1].destroy()) and False)
+
+    # ---------------------------------------------------------------- two screens
+    def other_screen(self):
+        here, _area = self.world.monitor_at(self.x, self.y - 1)
+        others = [m for m in self.world.monitors if m[0].x != here.x or m[0].y != here.y]
+        if not others:
+            return
+        _geo, area = others[0]
+        middle = area.x + area.width / 2
+        floor = self.world.floor_for(middle)
+        if self.bed is not None:
+            self.wake_up()
+        if self.on_ground():
+            self.open_portal(floor, middle, self.arrived)
+        else:
+            self._pop_to(middle, floor.y - 4)
+
+    def _pop_to(self, x, y):
+        self.route = None
+        self.poof()
+        self.orient = GROUND
+        self.x, self.y = float(x), float(y)
+        self.poof()
+        self.fall()
 
     # ---------------------------------------------------------------- sweeping (Tidy Downloads)
     def sweep(self, text):
@@ -3287,8 +3378,9 @@ class Cat(Gtk.Window):
         self.poof()
         self.pajamas = True
         # her bed goes in the bottom-left corner of the screen
-        floor = min((t for t in self.world.segments if t.kind == "floor"), key=lambda t: t.x1)
-        bx = floor.x1 + 18 * self.scale
+        _geo, area = self.world.monitor_at(self.x, self.y - 1)
+        bx = area.x + 18 * self.scale
+        floor = self.world.floor_for(bx)
         self._make_bed(bx)
         self.app.sounds.play("mrrp")
         if self.on_ground():
@@ -3691,6 +3783,8 @@ class PixelCatApp(Gtk.Application):
         item("Stop the laser pointer" if cat.laser is not None else "Laser pointer", cat.toggle_laser, play)
         item("Cardboard box", cat.give_box if cat.box is None else None, play)
         item("Call her here" + (f"  ({self.shortcut})" if self.shortcut else ""), cat.call)
+        if len(self.world.monitors) > 1:
+            item("Go to the other screen", cat.other_screen)
         if cat.bed is not None:
             item("Wake her up", cat.wake_up)
         else:

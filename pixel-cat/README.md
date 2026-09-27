@@ -120,6 +120,18 @@ envelope: she comes to your mouse and shows who it's from and what it's about.
 - **Her diary:** how many days you've been together, hearts, treats, yarn games, laser
   chases, boxes, butterflies, mugs, grappling hooks, portals, letters, breaks and photos.
 
+## Two screens
+
+She uses all your screens as one big playground:
+- If the bottoms of your screens line up, she walks straight from one to the other; if one
+  is higher (for example only one has the panel), she hops up or down at the edge.
+- Calling her, adventures, the grappling hook and portals all work across screens.
+- Right-click > **Go to the other screen** sends her over through a portal.
+- A fullscreen video or presentation on *her* screen: she slips over to the other screen
+  instead of hiding (she only hides if every screen is fullscreen).
+- Her bed goes in the bottom-left corner of the screen she's on, her away-nap happens on the
+  screen you were using, and butterflies fly in on her screen.
+
 ## Bedtime
 
 Right-click > **Send her to bed** (it says "it's late!" in the evening). She puts on her
