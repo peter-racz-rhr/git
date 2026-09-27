@@ -96,6 +96,33 @@ def pointer():
     return x, y
 
 
+def mouse_down():
+    """Is the left mouse button being held down right now?"""
+    try:
+        device = Gdk.Display.get_default().get_default_seat().get_pointer()
+        mask = Gdk.get_default_root_window().get_device_position(device)[3]
+        return bool(mask & Gdk.ModifierType.BUTTON1_MASK)
+    except Exception:
+        return False
+
+
+def log_error(where):
+    """Writes the error to ~/.cache/pixel-cat/errors.log (she carries on after it)."""
+    import traceback
+    try:
+        folder = os.path.join(GLib.get_user_cache_dir(), "pixel-cat")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "errors.log")
+        if os.path.exists(path) and os.path.getsize(path) > 200_000:
+            os.replace(path, path + ".old")
+        with open(path, "a") as f:
+            f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} in {where}\n")
+            traceback.print_exc(file=f)
+    except OSError:
+        pass
+    traceback.print_exc()
+
+
 # --------------------------------------------------------------------------
 # the cat's needs (saved between runs; time with the app closed doesn't count)
 # --------------------------------------------------------------------------
@@ -1334,6 +1361,7 @@ class Cat(Gtk.Window):
         self.connect("button-press-event", self._on_press)
         self.connect("button-release-event", self._on_release)
         self.connect("motion-notify-event", self._on_motion)
+        self.connect("grab-broken-event", self._on_grab_broken)
 
         self.cache = {}
         self.current = None
@@ -1373,6 +1401,7 @@ class Cat(Gtk.Window):
         self.music_off_since = 0.0
         self.props = []
         self.press = None
+        self.stuck_since = self.lost_since = None
         self.rubs = []
         self.petting_since = None
         self.grumpy_until = 0.0
@@ -1556,6 +1585,15 @@ class Cat(Gtk.Window):
         self.anim = 0.0
 
     def _tick(self):
+        # an error must never stop her for good: note it down and start her over
+        try:
+            self._tick_inner()
+        except Exception:
+            log_error("tick")
+            self.recover()
+        return True
+
+    def _tick_inner(self):
         now = time.monotonic()
         dt = min(0.1, now - self.last)
         self.last = now
@@ -1569,6 +1607,7 @@ class Cat(Gtk.Window):
         if self.hidden:
             self._debug(now)
             return True
+        self._watchdog(now)
         self.pet.tick(dt, self.state in ("sleep", "bed"))
         self.t += dt
         self.anim += dt
@@ -1608,6 +1647,13 @@ class Cat(Gtk.Window):
                                    for k in ("fullness", "fun", "energy", "affection")}}, f)
 
     def _refresh(self):
+        try:
+            self._refresh_inner()
+        except Exception:
+            log_error("refresh")
+        return True
+
+    def _refresh_inner(self):
         now = time.monotonic()
         if self.pet.explore and not self.hidden and now - getattr(self, "_scan_at", 0) > 5 \
                 and self.state not in ("sleep", "bed", "held"):
@@ -2481,6 +2527,79 @@ class Cat(Gtk.Window):
         elif what == "sad":
             self.pet.fullness = self.pet.fun = self.pet.affection = 10
             self.set_state("sad", 6)
+        elif what == "stuck":                    # a drag whose mouse release got lost
+            self.press = (self.x, self.y, time.monotonic())
+            self.seg = None
+            self.set_state("held")
+        elif what == "lost":                     # thrown somewhere off the screens
+            x0, _y0, x1, y1 = self.world.bounds
+            self.seg = None
+            self.x, self.y = float(x1 + 500), float(y1 + 500)
+            self.set_state("sit", 60)
+        elif what == "crash":
+            self.set_state("no_such_state")
+
+    def _on_grab_broken(self, _w, _event):
+        # the mouse got taken away mid-drag (lag, another window grabbing it): let go of her
+        if self.state == "held":
+            self.press = None
+            self.fall()
+        return False
+
+    def _watchdog(self, now):
+        """Gets her out of trouble: stuck in the air after a drag, or somewhere off the screens."""
+        if self.state == "held":
+            if not mouse_down():
+                # the button went up but the release got lost (lag while dragging between screens)
+                self.stuck_since = self.stuck_since or now
+                if now - self.stuck_since > 0.5:
+                    self.stuck_since = None
+                    self.press = None
+                    self.fall()
+            else:
+                self.stuck_since = None
+            return
+        visible = any(geo.x - 20 <= self.x <= geo.x + geo.width + 20
+                      and geo.y - 20 <= self.y - self.S / 2 <= geo.y + geo.height + 20
+                      for geo, _area in self.world.monitors)
+        if visible:
+            self.lost_since = None
+        else:
+            self.lost_since = self.lost_since or now
+            if now - self.lost_since > 1.5:
+                self.lost_since = None
+                self.recover()
+
+    def recover(self):
+        """Start over: drop her from the top of the screen the mouse is on."""
+        for tidy in (self._close_gadgets, lambda: self.set_state("sit")):   # rope, portals, chute, trampoline
+            try:
+                tidy()
+            except Exception:
+                pass
+        self.press = None
+        self.route = None
+        self.stuck_since = self.lost_since = None
+        self.orient = GROUND
+        self.seg = None
+        self.vx = self.vy = 0.0
+        try:
+            px, py = pointer()
+            geo, _area = self.world.monitor_at(px, py)
+            self.x = float(clamp(px, geo.x + 40, geo.x + geo.width - 40))
+            self.y = float(geo.y + self.S + 10)
+        except Exception:
+            x0, y0, x1, _y1 = self.world.bounds
+            self.x, self.y = float((x0 + x1) / 2), float(y0 + self.S + 10)
+        self.state, self.t, self.length, self.data, self.anim = "fall", 0.0, 0.0, {}, 0.0
+        if self.hidden:
+            self.hidden = False
+        self.show()
+        try:
+            self._place()
+            self.raise_all()
+        except Exception:
+            pass
 
     def _on_release(self, _w, event):
         if event.button != 1 or self.press is None:
@@ -2553,7 +2672,10 @@ class Cat(Gtk.Window):
 
     def call(self):
         if self.state == "held":
-            return
+            if mouse_down():
+                return
+            self.press = None              # a drag that never ended: let her go first
+            self.fall()
         if self.bed is not None:
             self.wake_up()
         px, py = pointer()

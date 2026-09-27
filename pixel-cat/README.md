@@ -184,6 +184,15 @@ size=2                       # 1 small, 2 normal, 3 big
 
 Restart her after changing it (`pixel-cat --quit`, then start Pixel Cat from the menu).
 
+## If she gets lost
+
+She looks after herself: if a drag gets stuck (the mouse release got lost, for example
+while dragging her between screens), she lets go of the pointer by herself; if she ends up
+off the screens, or something goes wrong inside the app, she drops back in from the top of
+the screen your mouse is on. Errors are written to `~/.cache/pixel-cat/errors.log`.
+
+If she still doesn't come back: `pkill -f pixel_cat.py; pixel-cat`
+
 ## Notes
 
 - She needs an X11 desktop (Linux Mint Cinnamon, MATE or Xfce). On Wayland she can't see
