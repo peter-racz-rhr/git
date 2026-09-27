@@ -24,6 +24,7 @@ import imaplib
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -38,6 +39,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 APP_ID = "io.github.mailbrief.MailBrief"
+PIXEL_CAT = os.path.expanduser("~/.local/bin/pixel-cat")
 CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "mail-brief")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.ini")
 SECRETS_FILE = os.path.join(CONFIG_DIR, "secrets.json")
@@ -1107,6 +1109,17 @@ class MailWindow(Gtk.ApplicationWindow):
             flag = "DEADLINE: " if e.get("deadline") else ""
             lines.append(f"{flag}{e['subject']} – {e['sender']}")
         notify(title, "\n".join(lines), urgent=bool(important))
+        if important and os.path.exists(PIXEL_CAT):
+            # Pixel Cat brings the news over
+            first = important[0]
+            note = ("Deadline! " if first.get("deadline") else "") + f"{first['subject']} – {first['sender']}"
+            if len(important) > 1:
+                note += f" (+{len(important) - 1} more)"
+            try:
+                subprocess.Popen([PIXEL_CAT, "--deliver", note], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
 
     # ---------------------------------------------------------------- settings dialog
     def open_settings(self):

@@ -69,6 +69,11 @@ Summaries are 2-3 sentences (more for dense emails), in the email's language. Af
 update that changes the summary style, use menu > **Summarize again** to rewrite the current
 ones.
 
+## Pixel Cat
+
+If Pixel Cat is installed too, she brings you a tiny envelope when an important email or a
+deadline arrives, showing who it's from and the subject.
+
 ## Privacy
 
 - The app password and the Groq key are stored in `~/.config/mail-brief/secrets.json`,

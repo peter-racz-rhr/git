@@ -115,7 +115,13 @@ class Pet:
         self.explore = True
         self.hats = True
         self.adopted = None
+        self.weather = True
+        self.study = True
+        self.stats = {}
+        self.style = "classic"
         self.load()
+        if self.style not in sprites.STYLES:
+            self.style = "classic"
         if self.name and not self.adopted:
             self.adopted = time.strftime("%Y-%m-%d")
 
@@ -125,7 +131,7 @@ class Pet:
                 data = json.load(f)
         except (OSError, ValueError):
             return
-        for key in ("name", "coat", "fullness", "fun", "energy", "affection", "muted", "x", "in_bed", "wake_at", "explore", "hats", "adopted"):
+        for key in ("name", "coat", "fullness", "fun", "energy", "affection", "muted", "x", "in_bed", "wake_at", "explore", "hats", "adopted", "weather", "study", "stats", "style"):
             if key in data:
                 setattr(self, key, data[key])
         if self.coat not in sprites.COATS:
@@ -135,7 +141,7 @@ class Pet:
         os.makedirs(DATA_DIR, exist_ok=True)
         data = {k: getattr(self, k) for k in ("name", "coat", "fullness", "fun", "energy", "affection",
                                               "muted", "x", "in_bed", "wake_at", "explore", "hats",
-                                              "adopted")}
+                                              "adopted", "weather", "study", "stats", "style")}
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -152,6 +158,18 @@ class Pet:
     def add(self, **amounts):
         for key, value in amounts.items():
             setattr(self, key, clamp(getattr(self, key) + value, 0.0, 100.0))
+
+    def count(self, what, n=1):
+        self.stats[what] = self.stats.get(what, 0) + n
+
+    def days_together(self):
+        if not self.adopted:
+            return 1
+        try:
+            start = time.mktime(time.strptime(self.adopted, "%Y-%m-%d"))
+        except ValueError:
+            return 1
+        return max(1, int((time.time() - start) // 86400) + 1)
 
     def birthday(self):
         if not self.adopted:
@@ -479,7 +497,6 @@ class World:
         self.stacking = ()
         self._extents = {}
         self.windows = []
-        self.by_xid = {}
         self.ledges = {}             # xid -> [(dx, dy, length)] relative to the window
         self.on_stacking_changed = None
         if self.screen is not None:
@@ -534,7 +551,10 @@ class World:
             self.screen.force_update()
             workspace = self.screen.get_active_workspace()
             usable = []
+            own = os.getpid()
             for w in self.screen.get_windows_stacked():
+                if w.get_pid() == own:
+                    continue                          # her own setup/diary windows
                 if w.is_minimized() or w.is_shaded():
                     continue
                 if w.get_window_type() not in (Wnck.WindowType.NORMAL, Wnck.WindowType.DIALOG,
@@ -546,10 +566,10 @@ class World:
                 left, right, top, bottom = self._frame_extents(w.get_xid())
                 usable.append((w, x + left, y + top, width - left - right, height - top - bottom))
             active = self.screen.get_active_window()
-            self.fullscreen = bool(active is not None and active.is_fullscreen() and not active.is_minimized())
+            self.fullscreen = bool(active is not None and active.get_pid() != own and active.is_fullscreen()
+                                   and not active.is_minimized())
             self.stacking = tuple(u[0].get_xid() for u in usable)
             self.windows = [(u[0].get_xid(), u[1], u[2], u[3], u[4]) for u in usable]
-            self.by_xid = {u[0].get_xid(): u[0] for u in usable}
             for index, (w, x, y, width, height) in enumerate(usable):
                 xid = w.get_xid()
                 above = usable[index + 1:]
@@ -685,8 +705,11 @@ class World:
         return out
 
     def window_pos(self, xid):
-        """Where a window is right now (Wnck keeps this up to date as it moves)."""
-        w = self.by_xid.get(xid)
+        """Where a window is right now (Wnck keeps this up to date as it moves).
+        Looked up fresh every time: holding on to a window that has closed crashes Wnck."""
+        if xid not in self.stacking:
+            return None
+        w = Wnck.Window.get(xid)
         if w is None:
             return None
         try:
@@ -943,6 +966,87 @@ class Trampoline(Overlay):
         return False
 
 
+class IdleClock:
+    """How long since you last touched the mouse or keyboard (X screensaver extension;
+    falls back to watching the mouse only)."""
+
+    class _Info(ctypes.Structure):
+        _fields_ = [("window", ctypes.c_ulong), ("state", ctypes.c_int), ("kind", ctypes.c_int),
+                    ("til_or_since", ctypes.c_ulong), ("idle", ctypes.c_ulong), ("event_mask", ctypes.c_ulong)]
+
+    def __init__(self):
+        self.xss = None
+        self.last_pointer = None
+        self.last_move = time.monotonic()
+        try:
+            xss = ctypes.cdll.LoadLibrary(ctypes.util.find_library("Xss") or "libXss.so.1")
+            x11 = ctypes.cdll.LoadLibrary(ctypes.util.find_library("X11"))
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XDefaultRootWindow.restype = ctypes.c_ulong
+            x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+            xss.XScreenSaverAllocInfo.restype = ctypes.POINTER(self._Info)
+            xss.XScreenSaverQueryInfo.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(self._Info)]
+            display = x11.XOpenDisplay(None)
+            if display:
+                self.xss, self.display = xss, display
+                self.root = x11.XDefaultRootWindow(display)
+                self.info = xss.XScreenSaverAllocInfo()
+        except (OSError, TypeError, AttributeError):
+            self.xss = None
+
+    def seconds(self):
+        if self.xss is not None and self.xss.XScreenSaverQueryInfo(self.display, self.root, self.info):
+            return self.info.contents.idle / 1000.0
+        now = time.monotonic()
+        p = pointer()
+        if p != self.last_pointer:
+            self.last_pointer, self.last_move = p, now
+        return now - self.last_move
+
+
+class Weather:
+    """Budapest's weather every 30 minutes from open-meteo.com (free, no account)."""
+
+    URL = ("https://api.open-meteo.com/v1/forecast?latitude=47.498&longitude=19.040"
+           "&current=weather_code,temperature_2m&timezone=Europe%2FBudapest")
+
+    def __init__(self, pet):
+        self.pet = pet
+        self.kind = None          # "rain", "snow" or None
+        self.text = None
+        self._check()
+        GLib.timeout_add_seconds(30 * 60, self._check)
+
+    def _check(self):
+        if self.pet.weather and not os.environ.get("PIXEL_CAT_WEATHER"):
+            threading.Thread(target=self._fetch, daemon=True).start()
+        elif os.environ.get("PIXEL_CAT_WEATHER"):
+            self.kind = os.environ["PIXEL_CAT_WEATHER"]          # for testing: rain / snow
+            self.text = f"{self.kind} (test)"
+        return True
+
+    def _fetch(self):
+        import urllib.request
+        try:
+            with urllib.request.urlopen(self.URL, timeout=15) as r:
+                data = json.load(r)["current"]
+        except Exception:
+            return
+        code = int(data.get("weather_code", 0))
+        temp = data.get("temperature_2m")
+        if code in (71, 73, 75, 77, 85, 86):
+            kind, word = "snow", "snowing"
+        elif code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99):
+            kind, word = "rain", "raining"
+        else:
+            kind, word = None, {0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "cloudy",
+                                45: "foggy", 48: "foggy"}.get(code, "dry")
+        GLib.idle_add(lambda: (setattr(self, "kind", kind),
+                               setattr(self, "text", f"Budapest: {word}, {temp:.0f}°C" if temp is not None
+                                       else f"Budapest: {word}")) and False)
+
+
 class Butterfly(Gtk.Window):
     """Flutters in, dances around her for a while (she tries to catch it), then leaves.
     Now and then it lands on her head instead."""
@@ -1130,6 +1234,16 @@ def today():
     return time.localtime()
 
 
+def now_ok(data, name, seconds):
+    """A little per-state cooldown: True at most once every `seconds`."""
+    key = "_next_" + name
+    now = time.monotonic()
+    if now >= data.get(key, 0):
+        data[key] = now + seconds
+        return True
+    return False
+
+
 def night(hour=None):
     hour = time.localtime().tm_hour if hour is None else hour
     return hour >= 20 or hour < 7
@@ -1148,7 +1262,7 @@ def next_morning():
 # the cat
 # --------------------------------------------------------------------------
 
-CALM = {"stand", "sit", "walk", "groom", "sad", "vibe", "look"}
+CALM = {"stand", "sit", "walk", "groom", "sad", "vibe", "look", "study"}
 GROUND, RIGHT_WALL, LEFT_WALL, CEILING = 0, 1, 2, 3
 ANGLE = {GROUND: 0, RIGHT_WALL: -math.pi / 2, LEFT_WALL: math.pi / 2, CEILING: math.pi}
 
@@ -1160,7 +1274,8 @@ class Cat(Gtk.Window):
         self.pet = app.pet
         self.world = app.world
         self.scale = app.scale
-        self.S = max(sprites.W, sprites.H) * self.scale
+        self.art = sprites.STYLES[self.pet.style]
+        self.S = max(self.art.W, self.art.H) * self.scale
         self.set_app_paintable(True)
         self.composited = rgba_visual(self)
         self.set_default_size(self.S, self.S)
@@ -1195,6 +1310,14 @@ class Cat(Gtk.Window):
         self.butterfly = None
         self.bf_tries = 0
         self.mug = None
+        self.box = None
+        self.laser = None
+        self.letter = None
+        self.idle_mode = False
+        self.work_s = 0.0
+        self.reminded_at = 0.0
+        self.reminders = 0
+        self.idle_clock = IdleClock()
         self.plan_cost = 0.0
         self.party_at = 0.0
         self.route = None
@@ -1240,20 +1363,26 @@ class Cat(Gtk.Window):
     def recolor(self):
         self.cache.clear()
         self.current_key = None
+        if self.art is not sprites.STYLES[self.pet.style]:
+            # switched between classic and detailed: a different window size
+            self.art = sprites.STYLES[self.pet.style]
+            self.S = max(self.art.W, self.art.H) * self.scale
+            self.set_default_size(self.S, self.S)
+            self.resize(self.S, self.S)
+            self.pos = None
         self._render()
 
     # ---------------------------------------------------------------- drawing
     def _image(self, key):
         if key in self.cache:
             return self.cache[key]
-        name, flip, orient, headset, pajamas, hat = key
-        frame = sprites.FRAMES[name]
+        name, flip, orient, extras, pajamas = key
+        frame = self.art.FRAMES[name]
         if pajamas:
-            frame = sprites.with_nightcap(frame)
-        elif headset and name != "held":
-            frame = sprites.with_headset(frame)
-        elif hat:
-            frame = sprites.with_hat(frame, hat)
+            frame = self.art.with_nightcap(frame)
+        else:
+            for extra in extras:
+                frame = self.art.with_extra(frame, extra)
         img = sprites.render(frame[0], self.pet.coat, self.scale, flip, pajamas)
         S = self.S
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, S, S)
@@ -1272,7 +1401,7 @@ class Cat(Gtk.Window):
     def _show(self, name, flip=None):
         if flip is None:
             flip = self.facing < 0
-        key = (name, flip, self.orient, self.headset, self.pajamas, self.pet.hat())
+        key = (name, flip, self.orient, self._dress(name), self.pajamas)
         if key == self.current_key:
             return
         surface, region = self._image(key)
@@ -1281,6 +1410,28 @@ class Cat(Gtk.Window):
         if not self.composited:
             self.shape_combine_region(region)
         self.queue_draw()
+
+    def prop_scale(self):
+        """Her bed, box, parachute ... grow with her for the detailed style."""
+        return self.scale + (1 if self.art.name == "detailed" else 0)
+
+    def _dress(self, name):
+        """What she's wearing on top of this frame: scarf, hat, headset, umbrella, a letter."""
+        out = []
+        upright = name not in ("held", "dangle", "dangle_happy", "jump") and self.orient == GROUND
+        weather = self.app.weather.kind if self.pet.weather else None
+        if weather == "snow" and name not in ("held",):
+            out.append("scarf")
+        hat = self.pet.hat()
+        if self.headset and name != "held":
+            out.append("headset")
+        elif hat:
+            out.append("hat:" + hat)
+        if weather == "rain" and upright and not self.state.startswith("sleep") and self.state != "box":
+            out.append("umbrella")
+        if self.letter is not None and name.startswith(("walk", "stand")):
+            out.append("envelope")
+        return tuple(out)
 
     def _draw(self, _w, cr):
         cr.set_operator(cairo.OPERATOR_SOURCE)
@@ -1323,6 +1474,7 @@ class Cat(Gtk.Window):
 
     def heart(self):
         self.float_part("HEART", drift=random.uniform(-6, 6) * self.scale / 2)
+        self.pet.count("hearts")
 
     def note(self):
         self.float_part("NOTE", rise=30 * self.scale / 2, drift=5 * self.scale, life=1.6)
@@ -1386,6 +1538,8 @@ class Cat(Gtk.Window):
                     self.mug = None
         self._ambient(dt)
         self._surprises(dt, now)
+        self._activity(dt, now)
+        self._move_laser()
         self._check_rub(now)
         self._place()
         self._debug(now)
@@ -1446,11 +1600,15 @@ class Cat(Gtk.Window):
                 out.append(w)
         if self.bed:
             out += list(self.bed[:2])
+        if self.box:
+            out += list(self.box[:2])
+        if self.laser is not None:
+            out.append(self.laser[0])
         return out
 
     def raise_all(self):
-        back = [self.bed[0]] if self.bed else []
-        front = [self.bed[1]] if self.bed else []
+        back = ([self.bed[0]] if self.bed else []) + ([self.box[0]] if self.box else [])
+        front = ([self.bed[1]] if self.bed else []) + ([self.box[1]] if self.box else [])
         others = [w for w in self._extras() if w not in back and w not in front]
         for w in back + [self] + others + front:
             try:
@@ -1486,7 +1644,7 @@ class Cat(Gtk.Window):
     def _reattach(self):
         """Ride along when her window moves; fall when it closes or gets covered."""
         if self.seg is None or self.orient != GROUND or self.state in ("jump", "fall", "held", "crouch_jump",
-                                                                        "bed"):
+                                                                        "bed", "box"):
             return
         seg, same = self.world.find(self.seg.key, self.x)
         if same and self.seg.kind in ("win", "ledge") and same[0].win_x != self.seg.win_x:
@@ -1553,6 +1711,8 @@ class Cat(Gtk.Window):
             options["go_note"] = 1.5
         if p.energy > 30 and len(self.world.segments) > 1:
             options["adventure"] = 1.8 if p.fun > 30 else 1.0
+        if self.pet.study and self.work_s > 10 * 60:
+            options["study"] = 3.0            # you're working, so she studies along
         total = sum(options.values())
         r = random.uniform(0, total)
         for name, weight in options.items():
@@ -1593,6 +1753,8 @@ class Cat(Gtk.Window):
             self._go_toward_note()
         elif name == "adventure":
             self._adventure()
+        elif name == "study":
+            self.set_state("study", random.uniform(25, 70))
         else:
             self.set_state("stand", 2)
 
@@ -1830,6 +1992,14 @@ class Cat(Gtk.Window):
                 self.seg = seg
                 self.y = float(seg.y)
                 self.set_state("land", 0.15)
+            elif d.get("into_box") and self.box is not None:
+                floor = self.world.floor_for(self.x)
+                self.seg = floor
+                self.x, self.y = float(self.box[2]), float(floor.y - 1 * self.scale)
+                self.pet.count("boxes")
+                self.pet.add(fun=10)
+                self.set_state("box", random.choice((random.uniform(30, 50), random.uniform(90, 180))))
+                self.raise_all()
             else:
                 self.fall(vx=(d["x1"] - d["x0"]) / d["T"] * 0.3, vy=0)
             if d.get("pounce"):
@@ -1898,7 +2068,7 @@ class Cat(Gtk.Window):
             self.data["tramp"] = None
             return
         cx = clamp(self.x + self.vx * 0.25, seg.x1 + 14 * self.scale, seg.x2 - 14 * self.scale)
-        tramp = Trampoline(self.scale, cx, seg.y)
+        tramp = Trampoline(self.prop_scale(), cx, seg.y)
         self.data["tramp"] = (tramp, seg.key)
         self.data["bounces"] = random.choice((1, 2))
         self.vx *= 0.3
@@ -1909,7 +2079,7 @@ class Cat(Gtk.Window):
         return (seg.y - self.y) if seg is not None else 0
 
     def _open_chute(self):
-        img = sprites.render(sprites.PARTS["PARACHUTE"], self.pet.coat, self.scale)
+        img = sprites.render(sprites.PARTS["PARACHUTE"], self.pet.coat, self.prop_scale())
         self.chute = Overlay(img)
         self._place_chute()
         self.chute.show()
@@ -1918,7 +2088,7 @@ class Cat(Gtk.Window):
     def _place_chute(self):
         c = self.chute
         # the harness hangs just above her head (the "dangle" frame's head starts at row 1)
-        head_top = self.y - self.S + (self.S - sprites.H * self.scale) + 1 * self.scale
+        head_top = self.y - self.S + (self.S - self.art.H * self.scale) + self.art.dangle_top * self.scale
         c.place(self.x - c.w / 2, head_top - c.h + 2 * self.scale)
 
     def _close_chute(self):
@@ -1933,6 +2103,8 @@ class Cat(Gtk.Window):
         if self.t > self.length:
             if self.route is not None:
                 self._next_hop()
+            elif self.laser is not None:
+                self.set_state("laser", 0)
             elif self.butterfly is not None and self.butterfly.chaseable():
                 self.set_state("chase_bf", 0)
             else:
@@ -1997,6 +2169,7 @@ class Cat(Gtk.Window):
                 self.props.remove(prop)
                 prop.destroy()
             self.pet.add(fullness=40, affection=5)
+            self.pet.count("treats")
             self.heart()
             self.set_state("sit", random.uniform(3, 6), happy=True)
 
@@ -2033,6 +2206,7 @@ class Cat(Gtk.Window):
             self.poof(yarn.x, yarn.y - 4 * self.scale)
             yarn.destroy()
             self.pet.add(fun=45, affection=8, energy=-3)
+            self.pet.count("yarn")
             self.heart()
             self.set_state("sit", random.uniform(3, 6), happy=True)
             return
@@ -2134,6 +2308,10 @@ class Cat(Gtk.Window):
                     if self.bed is not None:
                         self.wake_up()
                     self._close_gadgets()
+                    if self.state == "box" and self.box is not None:
+                        box, self.box = self.box, None
+                        box[0].destroy()
+                        box[1].destroy()
                     self.route = None
                     self.orient = GROUND
                     self.seg = None
@@ -2202,6 +2380,23 @@ class Cat(Gtk.Window):
             px, py = pointer()
             goal = self.world.landing(px, py - 2, 10 ** 6) or self.world.floor_for(px)
             self.open_portal(goal, px, self.arrived)
+        elif what == "diary":
+            self.app.show_diary()
+        elif what == "laser":
+            self.toggle_laser()
+        elif what == "box":
+            self.give_box()
+        elif what == "photo":
+            self.take_photo()
+        elif what == "study":
+            self.set_state("study", 30)
+        elif what == "remind":
+            self.work_s = self.STUDY_WORK
+            self.reminded_at = 0
+        elif what == "idle":
+            self.idle_clock.seconds = lambda: 999
+        elif what == "back":
+            self.idle_clock.seconds = lambda: 0
         elif what == "butterfly":
             if self.butterfly is None:
                 self.spawn_butterfly()
@@ -2508,16 +2703,23 @@ class Cat(Gtk.Window):
                 self.butterfly = None
                 if self.state == "chase_bf":
                     self.set_state("sit", random.uniform(3, 6), happy=True)
-        awake = self.state in CALM and self.on_ground() and self.route is None and not self.props
+        awake = self.state in CALM and self.on_ground() and self.route is None and not self.props \
+            and self.laser is None and self.box is None and not self.idle_mode
         if awake and self.butterfly is None and random.random() < dt / (300 if not night() else 1200):
             self.spawn_butterfly()
         elif awake and self.mug is None and self.seg.kind == "win" and self.seg.x2 - self.seg.x1 >= 160 \
                 and random.random() < dt / 480:
             self.mug_time()
         if self.butterfly is not None and self.butterfly.chaseable() and self.state in CALM \
-                and self.on_ground() and self.route is None:
+                and self.on_ground() and self.route is None and self.laser is None:
             self.bf_tries = 0
             self.set_state("chase_bf", 0)
+        if self.box is not None and self.state != "box" and self.route is None \
+                and now - self.box[0].born > 75:
+            box, self.box = self.box, None          # she wasn't interested after all
+            self.poof(box[2], box[1].pos[1] + box[1].h - 4 * self.scale)
+            box[0].destroy()
+            box[1].destroy()
         if self.pet.birthday() and now - self.party_at > 25 and self.state not in ("bed", "sleep") \
                 and not self.hidden:
             self.party_at = now
@@ -2533,6 +2735,7 @@ class Cat(Gtk.Window):
                         rise=random.uniform(20, 50), drift=random.uniform(-8, 8) * self.scale, life=1.6)
 
     def spawn_butterfly(self):
+        self.pet.count("butterflies")
         x0, _y0, x1, _y1 = self.world.bounds
         side = random.choice((-1, 1))
         start = (x0 - 20) if side < 0 else (x1 + 20)
@@ -2627,16 +2830,285 @@ class Cat(Gtk.Window):
         mug.destroy()
         self.mug = None
         self.pet.add(fun=10)
+        self.pet.count("mugs")
+
+    # ---------------------------------------------------------------- study buddy and idle mode
+    STUDY_WORK, STUDY_BREAK = 45 * 60, 10 * 60
+
+    def _activity(self, dt, now):
+        idle = self.idle_clock.seconds()
+        if idle < 60:
+            self.work_s += dt
+        elif idle > 5 * 60:
+            if self.work_s >= self.STUDY_WORK and idle > self.STUDY_BREAK:
+                self.pet.count("breaks")
+            if idle > self.STUDY_BREAK or self.work_s < self.STUDY_WORK:
+                self.work_s = 0.0
+                self.reminders = 0
+        # break reminder
+        if self.pet.study and self.work_s >= self.STUDY_WORK and idle < 60 and self.reminders < 3 \
+                and now - self.reminded_at > 5 * 60 and self.state in CALM and self.bed is None:
+            self.reminded_at = now
+            self.reminders += 1
+            self.go_to_pointer(then=self._break_time)
+        # idle mode: you're away, she naps in the middle of the screen
+        if not self.idle_mode and idle > 3 * 60 and self.bed is None and self.state in CALM \
+                and self.on_ground() and self.route is None and self.laser is None:
+            self.idle_mode = True
+            floor = max((t for t in self.world.segments if t.kind == "floor"),
+                        key=lambda t: t.x2 - t.x1)
+            middle = (floor.x1 + floor.x2) / 2
+            self.go_to(floor, middle, then=lambda: self.set_state("sleep", 4 * 3600), fail=self.decide)
+        elif self.idle_mode and idle < 2:
+            self.idle_mode = False
+            if self.state in ("sleep", "walk", "yawn") or self.route is not None:
+                self.route = None
+                self.set_state("stretch", 1.2, then_hi=True)
+
+    def _st_stretch(self, dt):
+        self._show("stretch")
+        if self.t > self.length:
+            self.set_state("yawn", 1.0)
+            if self.data.get("then_hi"):
+                GLib.timeout_add(1100, lambda: (self.say_hi() if self.state in CALM or self.state == "yawn"
+                                                else None) and False)
+
+    def say_hi(self):
+        self.app.sounds.play("meow2")
+        self.heart()
+        self.set_state("sit", random.uniform(4, 8), happy=True)
+
+    def _break_time(self):
+        self.app.sounds.play("meow")
+        self.pet.add(affection=2)
+        x, y = self.head_point()
+        mins = self.STUDY_BREAK // 60
+        Floater(text_surface(f"Break time! {mins} minutes", self.scale, 6 * self.scale),
+                x, y - 4 * self.scale, rise=24, life=6.0, hold=4.0)
+        self.set_state("sit", random.uniform(6, 10), happy=True)
+
+    def go_to_pointer(self, then):
+        px, py = pointer()
+        goal = self.world.landing(px, py - 2, 10 ** 6) or self.world.floor_for(px)
+        if not self.on_ground() or goal is None:
+            then()
+            return
+        self.go_to(goal, px, then=then, fail=then)
+
+    def _st_study(self, dt):
+        self._show("study0" if int(self.anim / 3.0) % 2 == 0 else "study1")
+        if self.t > self.length:
+            self.decide()
+
+    # ---------------------------------------------------------------- the laser pointer
+    def toggle_laser(self):
+        if self.laser is not None:
+            self.stop_laser()
+            return
+        if self.bed is not None:
+            self.wake_up()
+        dot = Overlay(sprites.render(sprites.PARTS["LASER"], "tabby", self.scale))
+        dot.show()
+        self.laser = (dot, time.monotonic())
+        self.raise_all()
+        if self.on_ground():
+            self.set_state("laser", 0)
+
+    def stop_laser(self):
+        if self.laser is None:
+            return
+        self.laser[0].destroy()
+        self.laser = None
+        self.pet.add(fun=30, energy=-6, affection=4)
+        self.pet.count("laser")
+        if self.state == "laser":
+            self.set_state("sit", random.uniform(3, 6), happy=True)
+
+    def _move_laser(self):
+        if self.laser is None:
+            return
+        dot, started = self.laser
+        px, py = pointer()
+        dot.place(px - dot.w / 2, py - dot.h / 2)
+        if time.monotonic() - started > 60:
+            self.stop_laser()
+
+    def _st_laser(self, dt):
+        if self.laser is None or not self.on_ground():
+            self.decide()
+            return
+        px, py = pointer()
+        s = self.seg
+        target = self.world.landing(px, py - 2, 10 ** 6)
+        # the dot is on another surface: jump over if she can
+        if target is not None and target.key != s.key and now_ok(self.data, "hop", 0.8):
+            hop = self._hop(s, target)
+            if hop is not None and abs(hop[0] - self.x) < 40:
+                self.jump_to(clamp(px, target.x1 + 12, target.x2 - 12), target.y, target.key)
+                return
+        tx = clamp(px, s.x1 + 10, s.x2 - 10)
+        gap = tx - self.x
+        if abs(gap) > 6:
+            self.facing = 1 if gap > 0 else -1
+            speed = 190 * self.scale / 2
+            self.x += clamp(gap, -speed * dt, speed * dt)
+            self.data["dist"] = self.data.get("dist", 0) + speed * dt
+            self._show(self._walk_frame(2 * self.scale))
+        else:
+            self._show("crouch0" if int(self.anim / 0.1) % 2 == 0 else "crouch1")
+        # pounce when the dot is just above her
+        if abs(px - self.x) < 50 and self.y - 200 < py < self.y - 20 and now_ok(self.data, "pounce", 1.2):
+            self.jump_to(px, clamp(py + 10 * self.scale, self.y - 200, self.y), None, pounce=True)
+
+    # ---------------------------------------------------------------- the box
+    def give_box(self):
+        floor = self.world.floor_for(self.x)
+        if floor is None or self.box is not None:
+            return
+        margin = 20 * self.scale
+        bx = clamp(self.x + self.facing * 60 * self.scale / 2, floor.x1 + margin, floor.x2 - margin)
+        back = Overlay(sprites.render(sprites.PARTS["BOX"], self.pet.coat, self.prop_scale()))
+        back.born = time.monotonic()
+        front = Overlay(sprites.render(sprites.PARTS["BOX_FRONT"], self.pet.coat, self.prop_scale()))
+        front.place(bx - front.w / 2, floor.y - front.h)
+        back.place(bx - back.w / 2, floor.y - front.h - 2 * self.scale)
+        back.show()
+        front.show()
+        self.poof(bx, floor.y - 4 * self.scale)
+        self.box = (back, front, bx, floor.key)
+        self.raise_all()
+        if self.bed is None and self.state not in ("held",):
+            self.set_state("look", 2.0)
+            GLib.timeout_add(900, self._head_to_box)
+
+    def _head_to_box(self):
+        if self.box is None or self.state not in CALM or self.bed is not None:
+            return False
+        bx, key = self.box[2], self.box[3]
+        floor = self.world.floor_for(bx)
+        if self.on_ground():
+            self.go_to(floor, bx - self.facing * 18 * self.scale, then=self._hop_in_box, fail=self._hop_in_box)
+        return False
+
+    def _hop_in_box(self):
+        if self.box is None:
+            self.decide()
+            return
+        self.route = None
+        bx = self.box[2]
+        floor = self.world.floor_for(bx)
+        self.facing = 1 if bx >= self.x else -1
+        self.jump_to(bx, floor.y - 1 * self.scale, None)
+        self.data["into_box"] = True             # carried into the jump by crouch_jump
+
+    def _st_box(self, dt):
+        long = self.length > 60
+        if long and self.t > 8:
+            self._show("sleep0" if int(self.anim / 1.5) % 2 == 0 else "sleep1")
+            if self.anim % 3.6 < dt:
+                self.zzz()
+        else:
+            self._show("sit_blink" if self.anim % 4.0 > 3.85 else "sit")
+        if self.t > self.length:
+            bx = self.box[2] if self.box else self.x
+            floor = self.world.floor_for(bx)
+            self.seg = floor
+            out = clamp(bx + random.choice((-1, 1)) * 30 * self.scale, floor.x1 + 10, floor.x2 - 10)
+            self.jump_to(out, floor.y, floor.key)
+            box, self.box = self.box, None
+            if box:
+                GLib.timeout_add(2500, lambda: (self.poof(box[2], box[1].pos[1] + box[1].h - 4 * self.scale),
+                                                box[0].destroy(), box[1].destroy()) and False)
+
+    # ---------------------------------------------------------------- a letter from Mail Brief
+    def deliver(self, text):
+        if self.bed is not None or self.hidden:
+            return
+        self.letter = text[:90]
+        self.pet.count("letters")
+        self.route = None
+        if self.state in ("held",):
+            return
+        self.go_to_pointer(then=self._hand_over)
+
+    def _hand_over(self):
+        text, self.letter = self.letter, None
+        if not text:
+            self.decide()
+            return
+        x, y = self.head_point()
+        Floater(sprites.render(sprites.PARTS["ENVELOPE"], "tabby", self.scale), x + 8 * self.scale, y + 10 * self.scale,
+                rise=20, life=2.0, hold=1.0)
+        Floater(text_surface(text, self.scale, 5 * self.scale), x, y - 6 * self.scale, rise=18, life=8.0, hold=6.0)
+        self.app.sounds.play("mrrp")
+        self.set_state("sit", random.uniform(4, 8), happy=True)
+
+    # ---------------------------------------------------------------- photos
+    def take_photo(self):
+        self.set_state("sit", 2.5, happy=True)
+        GLib.timeout_add(700, self._snap)
+
+    def _snap(self):
+        x0, y0, x1, y1 = self.world.bounds
+        w, h = 4 * self.S, 3 * self.S
+        rx = int(clamp(self.x - w / 2, x0, x1 - w))
+        ry = int(clamp(self.y - h + self.S / 3, y0, y1 - h))
+        pb = Gdk.pixbuf_get_from_window(Gdk.get_default_root_window(), rx, ry, w, h)
+        if pb is None:
+            return False
+        shot = cairo.ImageSurface(cairo.FORMAT_RGB24, w, h)
+        cr = cairo.Context(shot)
+        Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
+        cr.paint()
+        zoom, border, bottom = 2, 24, 90
+        W, H = w * zoom + 2 * border, h * zoom + border + bottom
+        card = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+        cr = cairo.Context(card)
+        cr.set_source_rgb(0.98, 0.97, 0.94)
+        cr.paint()
+        cr.save()
+        cr.translate(border, border)
+        cr.scale(zoom, zoom)
+        cr.set_source_surface(shot, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_NEAREST)
+        cr.paint()
+        cr.restore()
+        cr.set_source_rgb(0.2, 0.2, 0.25)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(26)
+        cr.move_to(border, H - bottom + 42)
+        cr.show_text(self.pet.name or "My cat")
+        cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(16)
+        cr.move_to(border, H - bottom + 70)
+        cr.show_text(time.strftime("%Y. %m. %d.  %H:%M"))
+        folder = os.path.join(GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
+                              or os.path.expanduser("~/Pictures"), "Pixel Cat")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{self.pet.name or 'cat'} {time.strftime('%Y-%m-%d %H-%M-%S')}.png")
+        card.write_to_png(path)
+        self.pet.count("photos")
+        flash = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        fc = cairo.Context(flash)
+        fc.set_source_rgba(1, 1, 1, 0.85)
+        fc.paint()
+        Floater(flash, rx + w / 2, ry + h, rise=0, life=0.25)
+        hx, hy = self.head_point()
+        Floater(text_surface("Saved to Pictures!", self.scale, 5 * self.scale), hx, hy - 4 * self.scale,
+                rise=16, life=2.5, hold=1.5)
+        self.last_photo = path
+        return False
 
     # ---------------------------------------------------------------- grappling hook
     def _gun_tip(self, frame):
         """Screen position of the tip of the gadget she's holding in an aiming frame."""
-        hx, hy = sprites.FRAMES[frame][1]
-        cx, cy = (hx + 10, hy - 2) if frame == "aim_hook" else (hx + 14, hy + 7)
+        hx, hy = self.art.FRAMES[frame][1]
+        dx, dy = self.art.gun_tips[frame]
+        cx, cy = hx + dx, hy + dy
         if self.facing < 0:
-            cx = sprites.W - 1 - cx
+            cx = self.art.W - 1 - cx
         wx, wy = self.x - self.S / 2, self.y - self.S
-        top = self.S - sprites.H * self.scale
+        top = self.S - self.art.H * self.scale
         return wx + (cx + 0.5) * self.scale, wy + top + (cy + 0.5) * self.scale
 
     def start_grapple(self, key, anchor_x):
@@ -2646,6 +3118,7 @@ class Cat(Gtk.Window):
             self._next_hop()
             return
         self.facing = 1 if anchor_x >= self.x else -1
+        self.pet.count("grapples")
         self.set_state("grapple_aim", 0.5, key=key, ax=float(anchor_x), win_x=seg.win_x)
 
     def _anchor(self):
@@ -2732,6 +3205,7 @@ class Cat(Gtk.Window):
             ax = clamp(self.x + self.facing * step, s.x1 + 12, s.x2 - 12)
         bx = clamp(gx, goal.x1 + 14, goal.x2 - 14)
         self.facing = 1 if ax >= self.x else -1
+        self.pet.count("portals")
         self.set_state("portal_aim", 0.7, ax=ax, akey=s.key, bx=bx, bkey=goal.key, then=then, made=False)
 
     def _st_portal_aim(self, dt):
@@ -2744,8 +3218,8 @@ class Cat(Gtk.Window):
             if goal is None:
                 self.decide()
                 return
-            d["pa"] = PortalWindow(self.scale, d["ax"], self.seg.y)
-            d["pb"] = PortalWindow(self.scale, d["bx"], goal.y)
+            d["pa"] = PortalWindow(self.prop_scale(), d["ax"], self.seg.y)
+            d["pb"] = PortalWindow(self.prop_scale(), d["bx"], goal.y)
             self.portals = [d["pa"], d["pb"]]
             self.app.sounds.play("mrrp")
             self.raise_all()
@@ -2798,8 +3272,8 @@ class Cat(Gtk.Window):
 
     def _make_bed(self, bx):
         floor = self.world.floor_for(bx)
-        back = Overlay(sprites.render(sprites.PARTS["BED"], self.pet.coat, self.scale))
-        front = Overlay(sprites.render(sprites.PARTS["BED_FRONT"], self.pet.coat, self.scale))
+        back = Overlay(sprites.render(sprites.PARTS["BED"], self.pet.coat, self.prop_scale()))
+        front = Overlay(sprites.render(sprites.PARTS["BED_FRONT"], self.pet.coat, self.prop_scale()))
         back.place(bx - back.w / 2, floor.y - back.h)
         front.place(bx - front.w / 2, floor.y - front.h)
         back.show()
@@ -2914,8 +3388,23 @@ class SetupWindow(Gtk.Window):
         title.get_style_context().add_class("pc-title")
         box.pack_start(title, False, False, 0)
 
+        self.art_style = app.pet.style
+        styles = Gtk.Box(spacing=0)
+        styles.get_style_context().add_class("linked")
+        styles.set_halign(Gtk.Align.CENTER)
+        first_button = None
+        for key, label in (("classic", "Classic (48 px)"), ("detailed", "Detailed (64 px)")):
+            b = Gtk.RadioButton.new_with_label_from_widget(first_button, label)
+            first_button = first_button or b
+            b.set_mode(False)
+            b.set_active(key == self.art_style)
+            b.connect("toggled", lambda w, k=key: w.get_active() and self._on_style(k))
+            styles.pack_start(b, False, False, 0)
+        box.pack_start(styles, False, False, 0)
+
         self.preview = Gtk.DrawingArea()
-        self.preview.set_size_request(sprites.W * 6 + 40, sprites.H * 6 + 20)
+        big = sprites.STYLES["detailed"]
+        self.preview.set_size_request(big.W * 5 + 40, big.H * 5 + 10)
         self.preview.get_style_context().add_class("pc-preview")
         self.preview.connect("draw", self._draw_preview)
         box.pack_start(self.preview, False, False, 0)
@@ -2967,6 +3456,10 @@ class SetupWindow(Gtk.Window):
         self.connect("delete-event", self._on_close)
         GLib.timeout_add(140, self._animate)
 
+    def _on_style(self, key):
+        self.art_style = key
+        self.preview.queue_draw()
+
     def _on_coat(self, button, key):
         if button.get_active():
             self.coat = key
@@ -2983,7 +3476,8 @@ class SetupWindow(Gtk.Window):
         width, height = widget.get_allocated_width(), widget.get_allocated_height()
         cycle = self.step % 48
         name = f"walk{self.step % 4}" if cycle < 28 else ("sit" if cycle < 40 else "sit_happy")
-        img = sprites.render(sprites.FRAMES[name][0], self.coat, 6, flip=False)
+        art = sprites.STYLES[self.art_style]
+        img = sprites.render(art.FRAMES[name][0], self.coat, 6 if art.name == "classic" else 5, flip=False)
         cr.set_source_surface(img, (width - img.get_width()) / 2, height - img.get_height() - 6)
         cr.get_source().set_filter(cairo.FILTER_NEAREST)
         cr.paint()
@@ -2993,6 +3487,7 @@ class SetupWindow(Gtk.Window):
         name = self.entry.get_text().strip() or self.entry.get_placeholder_text()
         self.app.pet.name = name[:24]
         self.app.pet.coat = self.coat
+        self.app.pet.style = self.art_style
         if not self.app.pet.adopted:
             self.app.pet.adopted = time.strftime("%Y-%m-%d")
         self.app.pet.save()
@@ -3036,6 +3531,7 @@ class PixelCatApp(Gtk.Application):
         self.pet = Pet()
         self.sounds = Sounds(self.pet)
         threading.Thread(target=self.sounds.prepare, daemon=True).start()
+        self.weather = Weather(self.pet)
         self.world = World()
         self.world.on_stacking_changed = lambda: self.cat and self.cat.raise_all()
         self.music = Music()
@@ -3075,6 +3571,19 @@ class PixelCatApp(Gtk.Application):
             if self.cat is not None:
                 self.cat.call()
                 return 0
+        if "--deliver" in args:
+            i = args.index("--deliver")
+            text = args[i + 1] if i + 1 < len(args) else "You've got mail"
+            if not self.pet.name:
+                if self.cat is None and self.setup_window is None:
+                    self.quit()
+                return 0
+            if self.cat is None:
+                self.ensure_cat()
+                GLib.timeout_add(3000, lambda: self.cat.deliver(text) and False)
+            else:
+                self.cat.deliver(text)
+            return 0
         if "--treat" in args and self.cat is not None:
             self.cat.give_treat()
             return 0
@@ -3109,45 +3618,63 @@ class PixelCatApp(Gtk.Application):
         self.setup_window.present()
 
     def show_menu(self, event):
-        pet = self.pet
+        pet, cat = self.pet, self.cat
         menu = Gtk.Menu()
 
-        def item(label, callback=None, sensitive=True):
+        def item(label, callback=None, into=menu):
             mi = Gtk.MenuItem(label=label)
-            mi.set_sensitive(sensitive and callback is not None)
+            mi.set_sensitive(callback is not None)
             if callback:
                 mi.connect("activate", lambda *_: callback())
-            menu.append(mi)
+            into.append(mi)
             return mi
+
+        def check(label, value, setter, into, tooltip=None):
+            mi = Gtk.CheckMenuItem(label=label)
+            mi.set_active(value)
+            if tooltip:
+                mi.set_tooltip_text(tooltip)
+            mi.connect("toggled", lambda w: (setter(w.get_active()), pet.save()))
+            into.append(mi)
+
+        def submenu(label):
+            mi = Gtk.MenuItem(label=label)
+            sub = Gtk.Menu()
+            mi.set_submenu(sub)
+            menu.append(mi)
+            return sub
 
         header = item(f"{pet.name} is {pet.mood_word()}")
         header.get_child().set_markup(f"<b>{GLib.markup_escape_text(pet.name)}</b> is {pet.mood_word()}"
                                       + ("  (it's her birthday!)" if pet.birthday() else ""))
         item(pet.needs_line())
+        if pet.weather and self.weather.text:
+            item(self.weather.text)
         menu.append(Gtk.SeparatorMenuItem())
-        item("Give a treat" + ("  (she's hungry!)" if pet.fullness < 30 else ""), lambda: self.cat.give_treat())
-        item("Play with yarn" + ("  (she's bored!)" if pet.fun < 25 else ""), lambda: self.cat.play_yarn())
-        item(f"Call her here" + (f"  ({self.shortcut})" if self.shortcut else ""), lambda: self.cat.call())
-        if self.cat.bed is not None:
-            item("Wake her up", lambda: self.cat.wake_up())
+        item("Give a treat" + ("  (she's hungry!)" if pet.fullness < 30 else ""), cat.give_treat)
+        play = submenu("Play" + ("  (she's bored!)" if pet.fun < 25 else ""))
+        item("Ball of yarn", cat.play_yarn, play)
+        item("Stop the laser pointer" if cat.laser is not None else "Laser pointer", cat.toggle_laser, play)
+        item("Cardboard box", cat.give_box if cat.box is None else None, play)
+        item("Call her here" + (f"  ({self.shortcut})" if self.shortcut else ""), cat.call)
+        if cat.bed is not None:
+            item("Wake her up", cat.wake_up)
         else:
-            item("Send her to bed" + ("  (it's late!)" if night() else ""), lambda: self.cat.send_to_bed())
+            item("Send her to bed" + ("  (it's late!)" if night() else ""), cat.send_to_bed)
         menu.append(Gtk.SeparatorMenuItem())
-        hats = Gtk.CheckMenuItem(label="Seasonal hats")
-        hats.set_active(pet.hats)
-        hats.set_tooltip_text("Pumpkin in October, Santa hat in December, party hat on her birthday")
-        hats.connect("toggled", lambda w: (setattr(pet, "hats", w.get_active()), pet.save(),
-                                           self.cat and self.cat.recolor()))
-        explore = Gtk.CheckMenuItem(label="Explore inside windows")
-        explore.set_active(pet.explore)
-        explore.set_tooltip_text("Sit on text boxes, chat bubbles, progress bars and other lines inside windows")
-        explore.connect("toggled", lambda w: (setattr(pet, "explore", w.get_active()), pet.save()))
-        menu.append(explore)
-        menu.append(hats)
-        sounds = Gtk.CheckMenuItem(label="Sounds")
-        sounds.set_active(not pet.muted)
-        sounds.connect("toggled", lambda w: (setattr(pet, "muted", not w.get_active()), pet.save()))
-        menu.append(sounds)
+        item("Take a photo", cat.take_photo)
+        item(f"{pet.name}'s diary", self.show_diary)
+        settings = submenu("Settings")
+        check("Sounds", not pet.muted, lambda v: setattr(pet, "muted", not v), settings)
+        check("Study buddy (break reminders)", pet.study, lambda v: setattr(pet, "study", v), settings,
+              "After 45 minutes of work she reminds you to take a 10-minute break")
+        check("Weather outfits (Budapest)", pet.weather,
+              lambda v: (setattr(pet, "weather", v), v and self.weather._check()), settings,
+              "Umbrella when it rains, scarf when it snows")
+        check("Seasonal hats", pet.hats, lambda v: (setattr(pet, "hats", v), cat.recolor()), settings,
+              "Pumpkin in October, Santa hat in December, party hat on her birthday")
+        check("Explore inside windows", pet.explore, lambda v: setattr(pet, "explore", v), settings,
+              "Sit on text boxes, chat bubbles, progress bars and other lines inside windows")
         item("Change coat or name…", self.show_setup)
         menu.append(Gtk.SeparatorMenuItem())
         item("Quit", self.quit)
@@ -3155,6 +3682,44 @@ class PixelCatApp(Gtk.Application):
         self.menu = menu
         menu.popup_at_pointer(event)
 
+    def show_diary(self):
+        if getattr(self, "diary", None) is not None:
+            self.diary.present()
+            return
+        pet = self.pet
+        win = Gtk.Window(title=f"{pet.name}'s diary")
+        win.set_resizable(False)
+        win.set_keep_above(True)
+        win.set_position(Gtk.WindowPosition.CENTER)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_border_width(18)
+        win.add(box)
+        portrait = sprites.render(sprites.STYLES[pet.style].FRAMES["sit_happy"][0], pet.coat,
+                                  5 if pet.style == "classic" else 4)
+        box.pack_start(Gtk.Image.new_from_surface(portrait), False, False, 0)
+        title = Gtk.Label(xalign=0.5)
+        title.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(pet.name)}</span>")
+        box.pack_start(title, False, False, 0)
+        days = pet.days_together()
+        since = Gtk.Label(label=f"Together for {days} day{'s' if days != 1 else ''}"
+                          + (f" (since {pet.adopted.replace('-', '. ')}.)" if pet.adopted else ""))
+        since.get_style_context().add_class("pc-dim")
+        box.pack_start(since, False, False, 4)
+        st = pet.stats
+        rows = [("Hearts received", "hearts"), ("Treats eaten", "treats"), ("Yarn games", "yarn"),
+                ("Laser chases", "laser"), ("Boxes sat in", "boxes"), ("Butterflies chased", "butterflies"),
+                ("Mugs knocked off", "mugs"), ("Grappling hooks fired", "grapples"), ("Portals opened", "portals"),
+                ("Letters delivered", "letters"), ("Breaks she made you take", "breaks"), ("Photos taken", "photos")]
+        grid = Gtk.Grid(column_spacing=24, row_spacing=4)
+        for i, (label, key) in enumerate(rows):
+            grid.attach(Gtk.Label(label=label, xalign=0), 0, i, 1, 1)
+            value = Gtk.Label(xalign=1)
+            value.set_markup(f"<b>{st.get(key, 0)}</b>")
+            grid.attach(value, 1, i, 1, 1)
+        box.pack_start(grid, False, False, 6)
+        win.connect("destroy", lambda *_: setattr(self, "diary", None))
+        self.diary = win
+        win.show_all()
 
 def main():
     if "--shortcut" in sys.argv[1:]:

@@ -7,6 +7,8 @@ headset and bobs her head.
 
 ![Six coats to choose from](../docs/screenshots/pixel-cat-coats.png)
 
+![Classic and detailed style](../docs/screenshots/pixel-cat-styles.png)
+
 ![What she does](../docs/screenshots/pixel-cat-showcase.png)
 
 ![Parachute, climbing, bedtime and exploring](../docs/screenshots/pixel-cat-more.png)
@@ -15,6 +17,8 @@ headset and bobs her head.
 
 ![Butterfly, mug and seasonal hats](../docs/screenshots/pixel-cat-fun.png)
 
+![Laser, box, study buddy, letters and weather](../docs/screenshots/pixel-cat-extras.png)
+
 ## Install
 
 ```bash
@@ -22,8 +26,9 @@ cd pixel-cat
 ./install.sh
 ```
 
-The first time, a small window opens. Pick her coat (orange tabby, black, grey & white,
-white, calico or siamese) and give her a name. Then she drops onto your desktop.
+The first time, a small window opens. Pick her style (**Classic**, about 48 px, or
+**Detailed**, about 64 px with bigger shiny eyes, whiskers and shading), her coat (orange
+tabby, black, grey & white, white, calico or siamese) and give her a name. Then she drops onto your desktop.
 
 The installer also:
 - starts her automatically when you log in
@@ -44,7 +49,7 @@ Uninstall with `./uninstall.sh` (add `--forget` to also forget her name and mood
 | Move a window she's sitting on | rides along, smoothly |
 | Close or minimize that window | falls and lands on whatever is below |
 | **Ctrl+Alt+C** | comes to your mouse: she runs, jumps from window to window and climbs up window sides to get there. A window floating high up? Out comes her **grappling hook**. Far away or no way by paw? She opens two **portals** and walks through |
-| Right-click her | her mood and needs, **Give a treat**, **Play with yarn**, **Send her to bed**, sounds on/off, exploring on/off, change coat or name |
+| Right-click her | her mood and needs (and Budapest's weather), **Give a treat**, **Play** (yarn, laser pointer, cardboard box), **Call her here**, **Send her to bed**, **Take a photo**, **her diary**, **Settings**, change style, coat or name |
 | Play music (Spotify or anything else) | puts on a headset, bobs her head, little music notes |
 | Watch a video or give a presentation in fullscreen | hides until you're done |
 
@@ -71,6 +76,44 @@ Quick Notes post-it.
 - **Seasonal hats:** a pumpkin all October, a Santa hat all December, and a party hat with
   confetti and a birthday wish on her "adoption birthday" (the day you first picked her).
   Turn hats off with right-click > **Seasonal hats**.
+
+## Playing
+
+- **Laser pointer:** right-click > Play > Laser pointer. A red dot follows your mouse and she
+  goes wild: runs after it, jumps to other windows for it, pounces when it's above her. It
+  switches itself off after a minute (or pick "Stop the laser pointer").
+- **Cardboard box:** right-click > Play > Cardboard box. She *has* to get in: only her head
+  sticks out, and sometimes she falls asleep in it.
+
+## Study buddy
+
+When you've been working for a while she studies along: tiny glasses and a little book.
+After **45 minutes** without a break she comes over to your mouse, meows, and says
+"Break time! 10 minutes". If you keep going she reminds you again 5 minutes later (at most
+three times). A break of 10 minutes starts a new round. Turn it off in right-click > Settings.
+
+## When you're away
+
+If you don't touch the mouse or keyboard for 3 minutes, she walks to the middle of the
+screen and naps. When you come back she wakes up, stretches, and says hi.
+
+## Weather (Budapest)
+
+She checks Budapest's weather every 30 minutes (open-meteo.com, free, no account; only
+Budapest's location is sent). When it rains she carries a little umbrella; when it snows she
+wears a scarf. The right-click menu shows the current weather. Turn it off in Settings.
+
+## Letters from Mail Brief
+
+If Mail Brief is installed, an important email or a deadline makes her bring you a tiny
+envelope: she comes to your mouse and shows who it's from and what it's about.
+
+## Photos and her diary
+
+- **Take a photo:** she poses, the screen flashes, and a polaroid with her name and the date
+  is saved in `Pictures/Pixel Cat`.
+- **Her diary:** how many days you've been together, hearts, treats, yarn games, laser
+  chases, boxes, butterflies, mugs, grappling hooks, portals, letters, breaks and photos.
 
 ## Bedtime
 

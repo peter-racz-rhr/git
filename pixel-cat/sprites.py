@@ -6,7 +6,8 @@ Letters:  O outline   B fur   S stripes/patches   L light fur (chest, belly)
           F fish   Y yarn   N light (notes, zzz)   G grey (poof)
 """
 
-W, H = 26, 22          # frame size in pixels; paws stand on the last row
+W, H = 26, 26          # frame size in pixels; paws stand on the last row
+DRAW_H = 22            # poses are drawn 22 rows high; 4 empty rows on top leave room for hats
 
 HEAD = """
 .O......O.
@@ -390,6 +391,86 @@ RY
 VQ
 """
 
+GLASSES = """
+.OOO..OOO.
+.O.OOOO.O.
+.OOO..OOO.
+"""
+
+BOOK = """
+.OOOO.OOOO.
+OWWWWOWWWWO
+OWNNWOWNNWO
+.OOOOOOOOO.
+"""
+
+BOOK2 = """
+.OOOO.OOOO.
+OWNNWOWWWWO
+OWWWWOWNNWO
+.OOOOOOOOO.
+"""
+
+UMBRELLA = """
+.....OOOO.....
+...OOQQQQOO...
+.OOQQQQQQQQOO.
+OQQQQQQQQQQQQO
+OOOOOOGOOOOOOO
+......G.......
+......G.......
+......G.......
+......GO......
+"""
+
+SCARF = """
+ORWRWRWRO
+.OORWOO..
+...ORO...
+...OWO...
+....O....
+"""
+
+ENVELOPE = """
+OOOOOOO
+ONOOONO
+ONNONNO
+ONNNNNO
+OOOOOOO
+"""
+
+BOX = """
+OTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTO
+OOOOOOOOOOOOOOOO
+"""
+
+BOX_FRONT = """
+.OOOOOOOOOOOOOO.
+OTTTTTTTTTTTTTTO
+OTTTTTTTOTTTTTTO
+OTTTTTTTOTTTTTTO
+OTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTO
+OTTTTTTTTTTTTTTO
+OOOOOOOOOOOOOOOO
+"""
+
+BOX_FLAPS = """
+OO..............OO
+OTO............OTO
+.OTO..........OTO.
+..OO..........OO..
+"""
+
+LASER = """
+.R.
+RWR
+.R.
+"""
+
 COATS = {
     # key: (label, colors)
     "tabby": ("Orange tabby", dict(O="#3b2417", B="#f0a04b", S="#c4642a", L="#fbe3c0", X="#f0a04b",
@@ -422,7 +503,7 @@ PARTS = {name: grid(value) for name, value in dict(globals()).items()
 
 
 def blank():
-    return [["." for _ in range(W)] for _ in range(H)]
+    return [["." for _ in range(W)] for _ in range(DRAW_H)]
 
 
 BODY_PARTS = {"BODY", "SIT_BODY", "LOAF", "HELD_BODY"}
@@ -513,6 +594,19 @@ def held(head="HEAD_SAD"):
     return c, (hx, hy)
 
 
+def studying(page):
+    c, (hx, hy) = sitting(head="HEAD", head_dy=page)
+    stamp(c, "GLASSES", hx, hy + 3)
+    stamp(c, "BOOK" if page == 0 else "BOOK2", hx, hy + 8 + page)
+    return c, (hx, hy)
+
+
+def carrying():
+    c, (hx, hy) = standing(LEGS_STILL)
+    stamp(c, "ENVELOPE", hx + 5, hy + 6)
+    return c, (hx, hy)
+
+
 def tapping():
     c, (hx, hy) = sitting()
     stamp(c, "PAW_UP", hx + 9, hy + 9)
@@ -583,16 +677,33 @@ def build_frames():
     f["aim_portal"] = aiming("PORTALGUN")
     f["eat0"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=6, head_dx=1)
     f["eat1"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=7, head_dx=1)
-    return f
+    f["stretch"] = standing([(6, 0, 0), (9, 0, 0), (13, 3, 0), (16, 3, 0)], head="HEAD_CLOSED",
+                            head_dy=4, head_dx=2, tail="TAIL_UP2")
+    f["study0"] = studying(0)
+    f["study1"] = studying(1)
+    f["carry"] = carrying()
+    # room on top for umbrellas and hats
+    pad = H - DRAW_H
+    return {name: ([["."] * W for _ in range(pad)] + canvas, (hx, hy + pad))
+            for name, (canvas, (hx, hy)) in f.items()}
 
 
 FRAMES = build_frames()
 
 
-PAJAMA = {"b": "#8db4e6", "s": "#5f86c8", "l": "#dce9f8"}
+PAJAMA = {"b": "#8db4e6", "s": "#5f86c8", "l": "#dce9f8", "d": "#7197cf"}
+
+
+def _darker(value, f=0.8):
+    r, g, b = (int(value[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % (int(r * f), int(g * f), int(b * f))
 
 
 def color_of(ch, coat, x, y, pajamas=False):
+    if ch in "Dd":
+        if pajamas and ch == "d":
+            return PAJAMA["d"]
+        return _darker(color_of("B", coat, x, y))
     if ch in "bsl":
         if pajamas:
             return PAJAMA[ch]
@@ -632,6 +743,23 @@ def with_hat(frame, hat):
     c = [row[:] for row in canvas]
     part, dx, dy = HATS[hat]
     stamp(c, part, hx + dx, hy + dy)
+    return c, (hx, hy)
+
+
+def with_extra(frame, extra):
+    """Put something on her: scarf, headset, hat:<name>, umbrella or envelope."""
+    if extra == "headset":
+        return with_headset(frame)
+    if extra.startswith("hat:"):
+        return with_hat(frame, extra[4:])
+    canvas, (hx, hy) = frame
+    c = [row[:] for row in canvas]
+    if extra == "scarf":
+        stamp(c, "SCARF", hx + 1, hy + 7)
+    elif extra == "umbrella":
+        stamp(c, "UMBRELLA", hx - 2, hy - 8)
+    elif extra == "envelope":
+        stamp(c, "ENVELOPE", hx + 5, hy + 6)
     return c, (hx, hy)
 
 
@@ -687,3 +815,436 @@ def bubble_with(part, x, y):
 
 def head_icon():
     return PARTS["HEAD"]
+
+
+# ==========================================================================
+# the detailed style: about 40 x 28 pixels, bigger eyes with a shine,
+# whiskers and a little shading ("D")
+# ==========================================================================
+
+D_PARTS = {name: grid(text) for name, text in dict(
+    HEAD="""
+...O..........O...
+..OPO........OPO..
+..OPPO......OPPO..
+..OBPBOOOOOOBPBO..
+..OBBBBSSSSBBBBO..
+..OBBBBBSSBBBBBO..
+..OBBWEBBBBWEBBO..
+..OBBEKBBBBEKBBO..
+OOOLMMMMPPMMMMLOOO
+..OLMMMOMMOMMMLO..
+OO.OLLMMMMMMLLO.OO
+....OOOOOOOOOO....
+""",
+    HEAD_CLOSED="""
+...O..........O...
+..OPO........OPO..
+..OPPO......OPPO..
+..OBPBOOOOOOBPBO..
+..OBBBBSSSSBBBBO..
+..OBBBBBSSBBBBBO..
+..OBBBBBBBBBBBBO..
+..OBBOOBBBBOOBBO..
+OOOLMMMMPPMMMMLOOO
+..OLMMMOMMOMMMLO..
+OO.OLLMMMMMMLLO.OO
+....OOOOOOOOOO....
+""",
+    HEAD_HAPPY="""
+...O..........O...
+..OPO........OPO..
+..OPPO......OPPO..
+..OBPBOOOOOOBPBO..
+..OBBBBSSSSBBBBO..
+..OBBBBBSSBBBBBO..
+..OBBOOBBBBOOBBO..
+..OPOBBOBBOBBOPO..
+OOOLMMMMPPMMMMLOOO
+..OLMMMOMMOMMMLO..
+OO.OLLMMMMMMLLO.OO
+....OOOOOOOOOO....
+""",
+    HEAD_SAD="""
+..................
+..OOO........OOO..
+..OPPOOOOOOOOPPO..
+..OBBBBBBBBBBBBO..
+..OBBBBSSSSBBBBO..
+..OBBOBBSSBBOBBO..
+..OBBWEBBBBWEBBO..
+..OBBEKBBBBEKBBO..
+OOOLMMMMPPMMMMLOOO
+..OLMMMOMMOMMMLO..
+OO.OLLMMMMMMLLO.OO
+....OOOOOOOOOO....
+""",
+    HEAD_YAWN="""
+...O..........O...
+..OPO........OPO..
+..OPPO......OPPO..
+..OBPBOOOOOOBPBO..
+..OBBBBSSSSBBBBO..
+..OBBBBBSSBBBBBO..
+..OBBBBBBBBBBBBO..
+..OBBOOBBBBOOBBO..
+OOOLMMMMPPMMMMLOOO
+..OLMMMORROMMMLO..
+OO.OLLMORROMLLO.OO
+....OOOOOOOOOO....
+""",
+    BODY="""
+..OOOOOOOOOOOOOOOOOO..
+.OBBSBBBSBBBSBBBBBBBO.
+ODBBSBBBSBBBSBBBBBBBBO
+ODBBBBBBBBBBBBBBBBBBBO
+ODDBBBBBBBBBBBBBBBBBBO
+ODDBBBBBBBBBBBBBBBBLLO
+.ODLLLLLLLLLLLLLLLLLO.
+..OOOOOOOOOOOOOOOOOO..
+""",
+    LEG="""
+OXXO
+OXXO
+OXXO
+OXXO
+OXXO
+OOOO
+""",
+    LEG_SHORT="""
+OXXO
+OXXO
+OOOO
+""",
+    TAIL_UP="""
+..OO..
+.OXXO.
+.OXXO.
+.OBO..
+OBBO..
+OBO...
+OBO...
+OBBO..
+.OBBO.
+..OBO.
+..OBBO
+...OBO
+""",
+    TAIL_UP2="""
+...OO.
+..OXXO
+..OXXO
+..OBO.
+.OBBO.
+.OBO..
+OBO...
+OBBO..
+.OBBO.
+..OBO.
+..OBBO
+...OBO
+""",
+    TAIL_BACK="""
+OO........
+OXOOOOOOO.
+OXBBBBBBBO
+.OBBBBBBBO
+..OOOOOOO.
+""",
+    TAIL_SIT="""
+.OO.........
+OXXO........
+OXBOOOOOOOO.
+.OBBBBBBBBBO
+..OOOOOOOOOO
+""",
+    TAIL_SIT2="""
+............
+.OO.........
+OXXOOOOOOOO.
+OXBBBBBBBBBO
+.OOOOOOOOOOO
+""",
+    SIT_BODY="""
+.....OOOOOO.....
+....OBBBBBBO....
+...OBSBBBBLLO...
+..OBBSBBBBLLLO..
+..ODBSBBBBLLLO..
+.ODBBSBBBBLLLO..
+.ODBBBBBBBLLLO..
+ODDBBBOBBBLLLO..
+ODBBBOBBBBOLLO..
+ODBBBOBBBBOXXO..
+ODBBOBBBBBOXXO..
+ODBBOBBBBBOXXO..
+ODBBOBBBBOXXXO..
+.OOOOOOOOOOOOO..
+""",
+    LOAF="""
+......OOOOOOOOOOOO......
+....OOBBSBBBSBBBBBOO....
+..OOBBBBSBBBSBBBBBBBOO..
+.ODBBBBBBBBBBBBBBBBBBBO.
+ODDBBBBBBBBBBBBBBBBBBBBO
+ODDBBBBBBBBBBBBBBBBBBBBO
+ODBOOOOOOOOOOOOOBBBBBBBO
+OXXBBBBBBBBBBBBBOBBBBBBO
+.OXXBBBBBBBBBBBBOBBBBBO.
+..OOOOOOOOOOOOOOOOOOOO..
+""",
+    HELD_BODY="""
+.OOOOOOOOOO.
+OLLLBBBBBBBO
+OLLLBBSBBBBO
+OLLBBBSBBBBO
+OLLBBBSBBBDO
+OLBBBBBBBBDO
+OBBBBBBBBBDO
+OBBBBBBBBBDO
+OBBBBBBBBBDO
+OBBBBBBBBDDO
+.OBBBBBBBDO.
+..OOOOOOOO..
+""",
+    TAIL_DOWN="""
+...OBO
+...OBO
+..OBO.
+..OBO.
+.OBO..
+.OBO..
+OBO...
+OXO...
+OXO...
+OXO...
+.O....
+""",
+    PAW_UP="""
+.OO.
+OXXO
+OXXO
+OXXO
+OXXO
+""",
+    HEADSET="""
+.....HHHHHHHH.....
+...HH........HH...
+..H............H..
+..H............H..
+""",
+    CUP="""
+OOO
+CCO
+CCO
+CCO
+OOO
+""",
+    SCARF="""
+ORWRWRWRWRWRO.
+.OOORWOOOOOO..
+....ORO.......
+....OWO.......
+.....O........
+""",
+    UMBRELLA="""
+.......OOOOOOOO.......
+....OOOQQQQQQQQOOO....
+..OOQQQQQQQQQQQQQQOO..
+.OQQQQQQQQQQQQQQQQQQO.
+OQQQQQQQQQQQQQQQQQQQQO
+OOOOOOOOOOGOOOOOOOOOOO
+..........G...........
+..........G...........
+..........G...........
+..........GO..........
+""",
+    GLASSES="""
+OOOO..OOOO
+O..OOOO..O
+O..O..O..O
+OOOO..OOOO
+""",
+).items()}
+
+D_W, D_DRAW_H, D_H = 40, 28, 34
+D_BODY_PARTS = {"BODY", "SIT_BODY", "LOAF", "HELD_BODY"}
+D_LEGS_STILL = [(9, 0, 0), (13, 0, 0), (21, 0, 0), (25, 0, 0)]
+D_LEGS_WALK = [
+    D_LEGS_STILL,
+    [(9, -1, 0), (13, 1, 1), (21, 1, 1), (25, -1, 0)],
+    D_LEGS_STILL,
+    [(9, 1, 1), (13, -1, 0), (21, -1, 0), (25, 1, 1)],
+]
+
+
+def _d(name):
+    return D_PARTS.get(name) or PARTS[name]
+
+
+def d_stamp(canvas, name, x, y):
+    part = _d(name) if isinstance(name, str) else name
+    body = isinstance(name, str) and name in D_BODY_PARTS
+    for r, row in enumerate(part):
+        for c, ch in enumerate(row):
+            if ch != "." and 0 <= y + r < len(canvas) and 0 <= x + c < len(canvas[0]):
+                canvas[y + r][x + c] = ch.lower() if body and ch in "BSLD" else ch
+    return canvas
+
+
+def d_blank():
+    return [["." for _ in range(D_W)] for _ in range(D_DRAW_H)]
+
+
+def d_standing(legs, head="HEAD", tail="TAIL_UP", head_dy=0, head_dx=0, body_dy=0, leg="LEG"):
+    c = d_blank()
+    d_stamp(c, tail, 2, 6 + body_dy)
+    d_stamp(c, "BODY", 7, 15 + body_dy)
+    for x, dx, lift in legs:
+        d_stamp(c, leg, x + dx, 22 - lift + body_dy + (3 if leg == "LEG_SHORT" else 0))
+    hx, hy = 20 + head_dx, 5 + head_dy + body_dy
+    d_stamp(c, head, hx, hy)
+    return c, (hx, hy)
+
+
+def d_sitting(head="HEAD", tail="TAIL_SIT", head_dy=0, paw=None):
+    c = d_blank()
+    d_stamp(c, tail, 1, 23)
+    d_stamp(c, "SIT_BODY", 13, 14)
+    hx, hy = 12, 3 + head_dy
+    d_stamp(c, head, hx, hy)
+    if paw:
+        d_stamp(c, "PAW_UP", hx + paw[0], hy + paw[1])
+    return c, (hx, hy)
+
+
+def d_loaf(head="HEAD_CLOSED", head_dy=0):
+    c = d_blank()
+    d_stamp(c, "LOAF", 4, 18)
+    hx, hy = 19, 12 + head_dy
+    d_stamp(c, head, hx, hy)
+    return c, (hx, hy)
+
+
+def d_crouch(wiggle=0):
+    c = d_blank()
+    d_stamp(c, "TAIL_BACK", 0 + wiggle, 16)
+    d_stamp(c, "BODY", 7 + wiggle, 18)
+    for x, dx, _lift in D_LEGS_STILL:
+        d_stamp(c, "LEG_SHORT", x + dx + wiggle, 25)
+    hx, hy = 20, 10
+    d_stamp(c, "HEAD", hx, hy)
+    return c, (hx, hy)
+
+
+def d_jumping():
+    c = d_blank()
+    d_stamp(c, "TAIL_BACK", 0, 13)
+    d_stamp(c, "BODY", 7, 14)
+    for x, dx in ((9, -3), (13, -2), (21, 2), (25, 3)):
+        d_stamp(c, "LEG", x + dx, 20)
+    hx, hy = 20, 4
+    d_stamp(c, "HEAD", hx, hy)
+    return c, (hx, hy)
+
+
+def d_held(head="HEAD_SAD"):
+    c = d_blank()
+    d_stamp(c, "TAIL_DOWN", 9, 17)
+    d_stamp(c, "HELD_BODY", 14, 11)
+    d_stamp(c, "LEG", 14, 22)
+    d_stamp(c, "LEG", 21, 22)
+    d_stamp(c, "LEG_SHORT", 23, 14)
+    hx, hy = 11, 0
+    d_stamp(c, head, hx, hy)
+    return c, (hx, hy)
+
+
+def d_build_frames():
+    f = {}
+    for i, legs in enumerate(D_LEGS_WALK):
+        f[f"walk{i}"] = d_standing(legs, tail="TAIL_UP" if i < 2 else "TAIL_UP2")
+    f["stand"] = d_standing(D_LEGS_STILL)
+    f["stand2"] = d_standing(D_LEGS_STILL, tail="TAIL_UP2")
+    f["stand_sad"] = d_standing(D_LEGS_STILL, head="HEAD_SAD", tail="TAIL_UP2")
+    f["sit"] = d_sitting()
+    f["sit_tail"] = d_sitting(tail="TAIL_SIT2")
+    f["sit_blink"] = d_sitting(head="HEAD_CLOSED")
+    f["sit_bob"] = d_sitting(head_dy=1, tail="TAIL_SIT2")
+    f["sit_bob_closed"] = d_sitting(head="HEAD_CLOSED", head_dy=1)
+    f["sit_happy"] = d_sitting(head="HEAD_HAPPY")
+    f["sit_happy2"] = d_sitting(head="HEAD_HAPPY", head_dy=1, tail="TAIL_SIT2")
+    f["sit_sad"] = d_sitting(head="HEAD_SAD")
+    f["sit_sad2"] = d_sitting(head="HEAD_SAD", tail="TAIL_SIT2")
+    f["yawn"] = d_sitting(head="HEAD_YAWN")
+    f["groom0"] = d_sitting(head="HEAD_CLOSED", paw=(9, 9))
+    f["groom1"] = d_sitting(head="HEAD_CLOSED", head_dy=1, paw=(9, 9))
+    f["sleep0"] = d_loaf()
+    f["sleep1"] = d_loaf(head_dy=1)
+    f["crouch0"] = d_crouch()
+    f["crouch1"] = d_crouch(1)
+    f["jump"] = d_jumping()
+    f["held"] = d_held()
+    f["dangle"] = d_held("HEAD")
+    f["dangle_happy"] = d_held("HEAD_HAPPY")
+    f["tap"] = d_sitting(paw=(15, 14))
+    c, (hx, hy) = d_sitting(paw=(15, 6))
+    d_stamp(c, "HOOKGUN", hx + 14, hy - 1)
+    f["aim_hook"] = (c, (hx, hy))
+    c, (hx, hy) = d_sitting(paw=(13, 10))
+    d_stamp(c, "PORTALGUN", hx + 14, hy + 10)
+    f["aim_portal"] = (c, (hx, hy))
+    f["eat0"] = d_standing(D_LEGS_STILL, head="HEAD_CLOSED", head_dy=9, head_dx=1)
+    f["eat1"] = d_standing(D_LEGS_STILL, head="HEAD_CLOSED", head_dy=10, head_dx=1)
+    f["stretch"] = d_standing([(9, 0, 0), (13, 0, 0), (21, 4, 0), (25, 4, 0)], head="HEAD_CLOSED",
+                              head_dy=6, head_dx=3, tail="TAIL_UP2")
+    for page in (0, 1):
+        c, (hx, hy) = d_sitting(head_dy=page)
+        d_stamp(c, "GLASSES", hx + 4, hy + 5)
+        d_stamp(c, "BOOK" if page == 0 else "BOOK2", hx + 4, hy + 12 + page)
+        f[f"study{page}"] = (c, (hx, hy))
+    c, (hx, hy) = d_standing(D_LEGS_STILL)
+    d_stamp(c, "ENVELOPE", hx + 9, hy + 10)
+    f["carry"] = (c, (hx, hy))
+    pad = D_H - D_DRAW_H
+    return {name: ([["."] * D_W for _ in range(pad)] + canvas, (hx, hy + pad))
+            for name, (canvas, (hx, hy)) in f.items()}
+
+
+D_CUP_RIGHT = [row[::-1] for row in D_PARTS["CUP"]]
+D_OVERLAYS = {
+    "scarf": ("SCARF", 2, 11), "umbrella": ("UMBRELLA", -2, -10), "envelope": ("ENVELOPE", 9, 10),
+    "hat:santa": ("SANTAHAT", 1, -5), "hat:pumpkin": ("PUMPKIN", 5, -1), "hat:party": ("PARTYHAT", 5, -3),
+    "nightcap": ("NIGHTCAP", 1, -5),
+}
+
+
+def d_with_extra(frame, extra):
+    canvas, (hx, hy) = frame
+    c = [row[:] for row in canvas]
+    if extra == "headset":
+        d_stamp(c, "HEADSET", hx, hy - 2)
+        d_stamp(c, "CUP", hx, hy + 4)
+        d_stamp(c, D_CUP_RIGHT, hx + 15, hy + 4)
+    elif extra in D_OVERLAYS:
+        part, dx, dy = D_OVERLAYS[extra]
+        d_stamp(c, part, hx + dx, hy + dy)
+    return c, (hx, hy)
+
+
+class Style:
+    def __init__(self, name, w, h, frames, with_extra, with_nightcap, gun_tips, dangle_top):
+        self.name, self.W, self.H, self.FRAMES = name, w, h, frames
+        self.with_extra, self.with_nightcap = with_extra, with_nightcap
+        self.gun_tips = gun_tips          # where the gadget's tip is, relative to the head
+        self.dangle_top = dangle_top      # row of her head top while hanging on the parachute
+
+
+STYLES = {
+    "classic": Style("classic", W, H, FRAMES, with_extra, with_nightcap,
+                     {"aim_hook": (10, -2), "aim_portal": (14, 7)}, FRAMES["dangle"][1][1]),
+    "detailed": Style("detailed", D_W, D_H, d_build_frames(), d_with_extra,
+                      lambda fr: d_with_extra(fr, "nightcap"),
+                      {"aim_hook": (15, -1), "aim_portal": (20, 11)}, None),
+}
+STYLES["detailed"].dangle_top = STYLES["detailed"].FRAMES["dangle"][1][1]

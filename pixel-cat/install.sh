@@ -25,6 +25,7 @@ need=()
 /usr/bin/python3 -c 'import gi; gi.require_version("Wnck", "3.0")' 2>/dev/null || need+=(gir1.2-wnck-3.0)
 command -v paplay >/dev/null || command -v pw-play >/dev/null || command -v aplay >/dev/null \
     || need+=(pulseaudio-utils)
+ldconfig -p 2>/dev/null | grep -q 'libXss.so.1' || need+=(libxss1)   # to notice when you're away
 if [ ${#need[@]} -gt 0 ]; then
     say "Installing: ${need[*]} (needs your password)"
     sudo apt-get install -y "${need[@]}" || warn "Could not install everything - she may not see your windows"
