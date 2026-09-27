@@ -13,6 +13,8 @@ headset and bobs her head.
 
 ![Grappling hook and portal gun](../docs/screenshots/pixel-cat-gadgets.png)
 
+![Butterfly, mug and seasonal hats](../docs/screenshots/pixel-cat-fun.png)
+
 ## Install
 
 ```bash
@@ -58,6 +60,17 @@ portal when that's the way to get there. She's a cat, so every so often she **sl
 edge, misses a jump or rolls off a window in her sleep (don't worry: parachute or trampoline). If your
 mouse is near her, she may crouch, wiggle, and pounce on it. Her favourite nap spot is a
 Quick Notes post-it.
+
+## Little surprises
+
+- **Butterflies:** now and then a pink butterfly flutters in. She runs after it, crouches,
+  wiggles and leaps, and it always gets away. Sometimes, after a while, it lands on her head
+  instead, and she sits very still and very happy.
+- **The mug:** sometimes a little mug appears near the edge of the window she's on. She
+  walks up to it, gives you a look, taps it... and pushes it off. It breaks at the bottom.
+- **Seasonal hats:** a pumpkin all October, a Santa hat all December, and a party hat with
+  confetti and a birthday wish on her "adoption birthday" (the day you first picked her).
+  Turn hats off with right-click > **Seasonal hats**.
 
 ## Bedtime
 

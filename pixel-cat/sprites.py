@@ -327,6 +327,69 @@ OG.GO
 O...O
 """
 
+SANTAHAT = """
+WW...........
+WWRO.........
+.ORROOOO.....
+..ORRRRROO...
+..ORRRRRRRO..
+.OWWWWWWWWWO.
+"""
+
+PUMPKIN = """
+...OVO..
+.OOOVOO.
+OJIJJIJO
+OJIJJIJO
+.OOOOOO.
+"""
+
+PARTYHAT = """
+...W...
+..OYO..
+..OWO..
+.OYYYO.
+.OWWWO.
+OYYYYYO
+"""
+
+BUTTERFLY0 = """
+OO...OO
+OYO.OYO
+OYYKYYO
+.OYKYO.
+OYOKOYO
+.O...O.
+"""
+
+BUTTERFLY1 = """
+.......
+..O.O..
+.OYKYO.
+OYYKYYO
+.OOKOO.
+.......
+"""
+
+MUG = """
+OOOOO..
+ONNNOOO
+ONRNO.O
+ONNNOOO
+ONNNO..
+.OOO...
+"""
+
+SHARD = """
+ON
+NO
+"""
+
+CONFETTI = """
+RY
+VQ
+"""
+
 COATS = {
     # key: (label, colors)
     "tabby": ("Orange tabby", dict(O="#3b2417", B="#f0a04b", S="#c4642a", L="#fbe3c0", X="#f0a04b",
@@ -345,7 +408,8 @@ COATS = {
 
 COMMON = dict(R="#d9344f", W="#ffffff", H="#2f2f3a", C="#e0455a", F="#6f9fd8", Y="#e86fa8",
               N="#f4f4f8", G="#9a9aa6", Q="#6f95d0", T="#b07a4a", U="#e7c6e8",
-              K="#3a3a44", V="#34d399", Z="#a7f3d0", A="#0f766e")
+              K="#3a3a44", V="#34d399", Z="#a7f3d0", A="#0f766e",
+              I="#c2410c", J="#fb923c")
 CALICO_PATCHES = ("#e8883a", "#e8883a", "#5a4d47")
 
 
@@ -449,6 +513,12 @@ def held(head="HEAD_SAD"):
     return c, (hx, hy)
 
 
+def tapping():
+    c, (hx, hy) = sitting()
+    stamp(c, "PAW_UP", hx + 9, hy + 9)
+    return c, (hx, hy)
+
+
 def aiming(gun):
     c, (hx, hy) = sitting()
     if gun == "HOOKGUN":
@@ -508,6 +578,7 @@ def build_frames():
     f["held"] = held()
     f["dangle"] = held(head="HEAD")
     f["dangle_happy"] = held(head="HEAD_HAPPY")
+    f["tap"] = tapping()
     f["aim_hook"] = aiming("HOOKGUN")
     f["aim_portal"] = aiming("PORTALGUN")
     f["eat0"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=6, head_dx=1)
@@ -550,6 +621,17 @@ def with_headset(frame):
     stamp(c, "HEADSET", hx, hy - 2)
     stamp(c, "CUP", hx - 1, hy + 2)
     stamp(c, CUP_RIGHT, hx + 9, hy + 2)
+    return c, (hx, hy)
+
+
+HATS = {"santa": ("SANTAHAT", -3, -5), "pumpkin": ("PUMPKIN", 1, -2), "party": ("PARTYHAT", 2, -4)}
+
+
+def with_hat(frame, hat):
+    canvas, (hx, hy) = frame
+    c = [row[:] for row in canvas]
+    part, dx, dy = HATS[hat]
+    stamp(c, part, hx + dx, hy + dy)
     return c, (hx, hy)
 
 
