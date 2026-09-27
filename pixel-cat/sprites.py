@@ -471,6 +471,24 @@ RWR
 .R.
 """
 
+BROOM = """
+T.......
+.T......
+..T.....
+...T....
+....T...
+...OyyO.
+..OyyyyO
+..OyTyyO
+...OOOO.
+"""
+
+DUST = """
+.GG.
+GNNG
+.GG.
+"""
+
 COATS = {
     # key: (label, colors)
     "tabby": ("Orange tabby", dict(O="#3b2417", B="#f0a04b", S="#c4642a", L="#fbe3c0", X="#f0a04b",
@@ -490,7 +508,7 @@ COATS = {
 COMMON = dict(R="#d9344f", W="#ffffff", H="#2f2f3a", C="#e0455a", F="#6f9fd8", Y="#e86fa8",
               N="#f4f4f8", G="#9a9aa6", Q="#6f95d0", T="#b07a4a", U="#e7c6e8",
               K="#3a3a44", V="#34d399", Z="#a7f3d0", A="#0f766e",
-              I="#c2410c", J="#fb923c")
+              I="#c2410c", J="#fb923c", y="#f2d15c")
 CALICO_PATCHES = ("#e8883a", "#e8883a", "#5a4d47")
 
 
@@ -760,6 +778,8 @@ def with_extra(frame, extra):
         stamp(c, "UMBRELLA", hx - 2, hy - 8)
     elif extra == "envelope":
         stamp(c, "ENVELOPE", hx + 5, hy + 6)
+    elif extra in ("broom0", "broom1"):
+        stamp(c, "BROOM", hx + (2 if extra == "broom0" else 4), hy + 6)
     return c, (hx, hy)
 
 
@@ -1215,7 +1235,7 @@ D_CUP_RIGHT = [row[::-1] for row in D_PARTS["CUP"]]
 D_OVERLAYS = {
     "scarf": ("SCARF", 2, 11), "umbrella": ("UMBRELLA", -2, -10), "envelope": ("ENVELOPE", 9, 10),
     "hat:santa": ("SANTAHAT", 1, -5), "hat:pumpkin": ("PUMPKIN", 5, -1), "hat:party": ("PARTYHAT", 5, -3),
-    "nightcap": ("NIGHTCAP", 1, -5),
+    "nightcap": ("NIGHTCAP", 1, -5), "broom0": ("BROOM", 6, 9), "broom1": ("BROOM", 9, 9),
 }
 
 

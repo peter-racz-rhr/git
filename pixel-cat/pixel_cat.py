@@ -1431,6 +1431,8 @@ class Cat(Gtk.Window):
             out.append("umbrella")
         if self.letter is not None and name.startswith(("walk", "stand")):
             out.append("envelope")
+        if self.state == "sweep" and name.startswith("stand"):
+            out.append("broom0" if int(self.anim / 0.22) % 2 == 0 else "broom1")
         return tuple(out)
 
     def _draw(self, _w, cr):
@@ -3020,6 +3022,31 @@ class Cat(Gtk.Window):
                 GLib.timeout_add(2500, lambda: (self.poof(box[2], box[1].pos[1] + box[1].h - 4 * self.scale),
                                                 box[0].destroy(), box[1].destroy()) and False)
 
+    # ---------------------------------------------------------------- sweeping (Tidy Downloads)
+    def sweep(self, text):
+        if self.bed is not None or self.hidden or not self.on_ground() or self.state in ("held", "box"):
+            return
+        if self.state not in CALM and self.state not in ("sleep",):
+            return
+        self.route = None
+        self.set_state("sweep", 3.6, text=text)
+
+    def _st_sweep(self, dt):
+        # the broom swings between two spots and she shuffles along with it
+        step = int(self.anim / 0.22)
+        self.x += (1 if step % 2 == 0 else -1) * 6 * dt * self.scale
+        self._show("stand" if step % 4 < 2 else "stand2")
+        if self.anim % 0.6 < dt:
+            dust = sprites.render(sprites.PARTS["DUST"], "tabby", self.scale)
+            Floater(dust, self.x + self.facing * 12 * self.scale, self.y - 1 * self.scale,
+                    rise=8 * self.scale, drift=self.facing * 6 * self.scale, life=0.7)
+        if self.t > self.length:
+            x, y = self.head_point()
+            Floater(text_surface(self.data.get("text") or "All tidy!", self.scale, 6 * self.scale),
+                    x, y - 4 * self.scale, rise=20, life=3.5, hold=2.0)
+            self.pet.count("sweeps")
+            self.set_state("sit", random.uniform(3, 6), happy=True)
+
     # ---------------------------------------------------------------- a letter from Mail Brief
     def deliver(self, text):
         if self.bed is not None or self.hidden:
@@ -3571,6 +3598,13 @@ class PixelCatApp(Gtk.Application):
             if self.cat is not None:
                 self.cat.call()
                 return 0
+        if "--sweep" in args:
+            i = args.index("--sweep")
+            if self.cat is not None:
+                self.cat.sweep(args[i + 1] if i + 1 < len(args) else "All tidy!")
+            elif not self.pet.name and self.setup_window is None:
+                self.quit()
+            return 0
         if "--deliver" in args:
             i = args.index("--deliver")
             text = args[i + 1] if i + 1 < len(args) else "You've got mail"
@@ -3709,7 +3743,7 @@ class PixelCatApp(Gtk.Application):
         rows = [("Hearts received", "hearts"), ("Treats eaten", "treats"), ("Yarn games", "yarn"),
                 ("Laser chases", "laser"), ("Boxes sat in", "boxes"), ("Butterflies chased", "butterflies"),
                 ("Mugs knocked off", "mugs"), ("Grappling hooks fired", "grapples"), ("Portals opened", "portals"),
-                ("Letters delivered", "letters"), ("Breaks she made you take", "breaks"), ("Photos taken", "photos")]
+                ("Letters delivered", "letters"), ("Downloads swept", "sweeps"), ("Breaks she made you take", "breaks"), ("Photos taken", "photos")]
         grid = Gtk.Grid(column_spacing=24, row_spacing=4)
         for i, (label, key) in enumerate(rows):
             grid.attach(Gtk.Label(label=label, xalign=0), 0, i, 1, 1)

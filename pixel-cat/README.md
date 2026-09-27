@@ -103,6 +103,11 @@ She checks Budapest's weather every 30 minutes (open-meteo.com, free, no account
 Budapest's location is sent). When it rains she carries a little umbrella; when it snows she
 wears a scarf. The right-click menu shows the current weather. Turn it off in Settings.
 
+## Sweeping with Tidy Downloads
+
+If Tidy Downloads is installed, she comes out with a tiny broom whenever it tidies your
+Downloads folder, sweeps up some dust, and tells you how many files were sorted.
+
 ## Letters from Mail Brief
 
 If Mail Brief is installed, an important email or a deadline makes her bring you a tiny
