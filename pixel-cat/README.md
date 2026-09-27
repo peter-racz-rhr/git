@@ -11,6 +11,8 @@ headset and bobs her head.
 
 ![Parachute, climbing, bedtime and exploring](../docs/screenshots/pixel-cat-more.png)
 
+![Grappling hook and portal gun](../docs/screenshots/pixel-cat-gadgets.png)
+
 ## Install
 
 ```bash
@@ -39,7 +41,7 @@ Uninstall with `./uninstall.sh` (add `--forget` to also forget her name and mood
 | Drag her | dangles from your pointer; let go (or throw her) and she lands on her feet |
 | Move a window she's sitting on | rides along, smoothly |
 | Close or minimize that window | falls and lands on whatever is below |
-| **Ctrl+Alt+C** | comes to your mouse: she runs, jumps from window to window and climbs up window sides to get there (and only pops over in a little cloud if there's really no way) |
+| **Ctrl+Alt+C** | comes to your mouse: she runs, jumps from window to window and climbs up window sides to get there. A window floating high up? Out comes her **grappling hook**. Far away or no way by paw? She opens two **portals** and walks through |
 | Right-click her | her mood and needs, **Give a treat**, **Play with yarn**, **Send her to bed**, sounds on/off, exploring on/off, change coat or name |
 | Play music (Spotify or anything else) | puts on a headset, bobs her head, little music notes |
 | Watch a video or give a presentation in fullscreen | hides until you're done |

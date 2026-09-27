@@ -914,6 +914,84 @@ class Trampoline(Overlay):
         return False
 
 
+class Rope(Gtk.Window):
+    """The grappling hook's rope, from her paws up to the hook."""
+
+    def __init__(self, scale):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.scale = scale
+        self.hook = sprites.render(sprites.PARTS["HOOK"], "tabby", scale)
+        self.surface = None
+        self.set_app_paintable(True)
+        self.composited = rgba_visual(self)
+        self.input_shape_combine_region(cairo.Region())
+        self.connect("draw", self._draw)
+
+    def set_ends(self, a, b, hooked=False):
+        sc = self.scale
+        pad = 6 * sc
+        x0, y0 = int(min(a[0], b[0]) - pad), int(min(a[1], b[1]) - pad)
+        w, h = int(abs(a[0] - b[0]) + 2 * pad), int(abs(a[1] - b[1]) + 2 * pad)
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, max(1, w), max(1, h))
+        cr = cairo.Context(surface)
+        steps = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / sc))
+        for i in range(steps + 1):
+            px = a[0] + (b[0] - a[0]) * i / steps - x0
+            py = a[1] + (b[1] - a[1]) * i / steps - y0
+            cr.set_source_rgb(0.23, 0.14, 0.09)
+            cr.rectangle(int(px / sc) * sc - sc / 2, int(py / sc) * sc, sc, sc)
+            cr.fill()
+        if hooked:
+            cr.set_source_surface(self.hook, b[0] - x0 - self.hook.get_width() / 2, b[1] - y0 - sc)
+            cr.paint()
+        surface.flush()
+        self.surface = surface
+        self.resize(max(1, w), max(1, h))
+        self.move(x0, y0)
+        if not self.composited:
+            self.shape_combine_region(Gdk.cairo_region_create_from_surface(surface))
+        if not self.get_visible():
+            self.show()
+        self.queue_draw()
+
+    def _draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        if self.surface is not None:
+            cr.set_operator(cairo.OPERATOR_OVER)
+            cr.set_source_surface(self.surface, 0, 0)
+            cr.paint()
+        return True
+
+
+class PortalWindow(Overlay):
+    """A swirling portal standing on a surface."""
+
+    def __init__(self, scale, cx, base):
+        self.frames = [sprites.render(sprites.portal(i), "tabby", scale) for i in range(3)]
+        super().__init__(self.frames[0])
+        self.place(cx - self.w / 2, base - self.h)
+        self.step = 0
+        self.alive = True
+        self.show()
+        GLib.timeout_add(110, self._spin)
+
+    def _spin(self):
+        if not self.alive:
+            return False
+        self.step += 1
+        self.surface = self.frames[self.step % 3]
+        self.queue_draw()
+        return True
+
+    def close(self):
+        if self.alive:
+            self.alive = False
+            Floater(self.surface, self.pos[0] + self.w / 2, self.pos[1] + self.h, rise=0, life=0.35)
+            self.destroy()
+
+
 def night(hour=None):
     hour = time.localtime().tm_hour if hour is None else hour
     return hour >= 20 or hour < 7
@@ -975,6 +1053,8 @@ class Cat(Gtk.Window):
         self.headset = False
         self.pajamas = False
         self.chute = None
+        self.portals = []
+        self.plan_cost = 0.0
         self.route = None
         self.bed = None
         self.music_off_since = 0.0
@@ -1278,6 +1358,8 @@ class Cat(Gtk.Window):
 
     def decide(self):
         self.route = None
+        if self.portals:
+            self._close_gadgets()
         if not self.on_ground():
             self.fall()
             return
@@ -1831,6 +1913,7 @@ class Cat(Gtk.Window):
                 if math.hypot(event.x_root - self.press[0], event.y_root - self.press[1]) > 6:
                     if self.bed is not None:
                         self.wake_up()
+                    self._close_gadgets()
                     self.route = None
                     self.orient = GROUND
                     self.seg = None
@@ -1895,6 +1978,10 @@ class Cat(Gtk.Window):
             self.send_to_bed()
         elif what == "wake":
             self.wake_up()
+        elif what == "portal":
+            px, py = pointer()
+            goal = self.world.landing(px, py - 2, 10 ** 6) or self.world.floor_for(px)
+            self.open_portal(goal, px, self.arrived)
         elif what == "vibe":
             self.set_state("vibe", 20)
         elif what == "sad":
@@ -2072,6 +2159,19 @@ class Cat(Gtk.Window):
             self.facing = 1 if side == "left" else -1
             self.set_state("land", 0.2)
 
+    def _grapple_hop(self, a, b, ax):
+        """Shoot the grappling hook from surface a up to the edge of b (anything high above)."""
+        if b.y > a.y - 60 or b.x2 - b.x1 < 44:
+            return None
+        x0, y0, _x1, _y1 = self.world.bounds
+        if b.y < y0 + 30:
+            return None
+        anchor = clamp(ax, b.x1 + 16, b.x2 - 16)
+        tx = clamp(anchor, a.x1 + 12, a.x2 - 12)
+        if abs(anchor - tx) > 120:
+            return None
+        return tx, anchor
+
     def _plan(self, goal):
         """The cheapest chain of jumps and climbs from where she is to the goal surface
         (Dijkstra; walking, jumping and climbing all cost something)."""
@@ -2086,6 +2186,7 @@ class Cat(Gtk.Window):
         while heap:
             cost, _n, a, ax, path = heapq.heappop(heap)
             if ident(a) == ident(goal):
+                self.plan_cost = cost
                 return path
             if len(path) >= 7 or cost > best.get(ident(a), float("inf")):
                 continue
@@ -2099,11 +2200,17 @@ class Cat(Gtk.Window):
                     c = cost + abs(tx - ax) + 80 + abs(lx - tx) * 0.5
                 else:
                     climb = self._climb_hop(a, b)
-                    if climb is None:
-                        continue
-                    tx, lx, side = climb
-                    step = ("climb", tx, side, b)
-                    c = cost + abs(tx - ax) + 60 + (a.y - b.y)
+                    if climb is not None:
+                        tx, lx, side = climb
+                        step = ("climb", tx, side, b)
+                        c = cost + abs(tx - ax) + 60 + (a.y - b.y)
+                    else:
+                        grapple = self._grapple_hop(a, b, ax)
+                        if grapple is None:
+                            continue
+                        tx, lx = grapple
+                        step = ("grapple", tx, lx, b)
+                        c = cost + abs(tx - ax) + 250 + (a.y - b.y) * 0.4
                 if c >= best.get(ident(b), float("inf")):
                     continue
                 best[ident(b)] = c
@@ -2131,12 +2238,18 @@ class Cat(Gtk.Window):
             return
         path = self._plan(goal)
         if path is None:
+            # no way by paw: out comes the portal gun
             self.route = None
-            r["fail"]()
+            self.open_portal(goal, r["x"], r["then"])
             return
         if not path:
             self.route = None
             self.walk_to(clamp(r["x"], self.seg.x1 + 10, self.seg.x2 - 10), run=True, then=r["then"])
+            return
+        if r["hops"] == 0 and self.plan_cost > 900 and random.random() < 0.6:
+            # a long way round: sometimes she just takes the portal
+            self.route = None
+            self.open_portal(goal, r["x"], r["then"])
             return
         kind, tx, lx, target = path[0]
         r["hops"] += 1
@@ -2144,6 +2257,9 @@ class Cat(Gtk.Window):
         if kind == "climb":
             side = lx
             self.walk_to(tx, run=True, then=lambda: self._start_window_climb(key, side))
+            return
+        if kind == "grapple":
+            self.walk_to(tx, run=True, then=lambda: self.start_grapple(key, lx))
             return
 
         def takeoff():
@@ -2154,6 +2270,155 @@ class Cat(Gtk.Window):
                 return
             self.jump_to(clamp(lx, seg.x1 + 12, seg.x2 - 12), seg.y, key)
         self.walk_to(tx, run=True, then=takeoff)
+
+    # ---------------------------------------------------------------- grappling hook
+    def _gun_tip(self, frame):
+        """Screen position of the tip of the gadget she's holding in an aiming frame."""
+        hx, hy = sprites.FRAMES[frame][1]
+        cx, cy = (hx + 10, hy - 2) if frame == "aim_hook" else (hx + 14, hy + 7)
+        if self.facing < 0:
+            cx = sprites.W - 1 - cx
+        wx, wy = self.x - self.S / 2, self.y - self.S
+        top = self.S - sprites.H * self.scale
+        return wx + (cx + 0.5) * self.scale, wy + top + (cy + 0.5) * self.scale
+
+    def start_grapple(self, key, anchor_x):
+        seg, same = self.world.find(key, anchor_x)
+        seg = seg or (same[0] if same else None)
+        if seg is None or not self.on_ground():
+            self._next_hop()
+            return
+        self.facing = 1 if anchor_x >= self.x else -1
+        self.set_state("grapple_aim", 0.5, key=key, ax=float(anchor_x), win_x=seg.win_x)
+
+    def _anchor(self):
+        d = self.data
+        seg, same = self.world.find(d["key"], d["ax"])
+        seg = seg or (same[0] if same else None)
+        if seg is None:
+            return None
+        if seg.win_x != d["win_x"]:           # the window moved: the hook moves with it
+            d["ax"] += seg.win_x - d["win_x"]
+            d["win_x"] = seg.win_x
+        return d["ax"], float(seg.y), seg
+
+    def _drop_rope(self):
+        rope = self.data.get("rope")
+        if rope is not None:
+            rope.destroy()
+            self.data["rope"] = None
+
+    def _close_gadgets(self):
+        """Put away portals and rope (also when she's interrupted halfway)."""
+        for portal in self.portals:
+            portal.close()
+        self.portals = []
+        if self.state.startswith("grapple"):
+            self._drop_rope()
+        if not self.get_visible() and not self.hidden:
+            self.show()
+
+    def _st_grapple_aim(self, dt):
+        self._show("aim_hook")
+        if self.t > self.length:
+            d = self.data
+            d["rope"] = Rope(self.scale)
+            d["tip"] = self._gun_tip("aim_hook")
+            self.state, self.t = "grapple_shoot", 0.0
+
+    def _st_grapple_shoot(self, dt):
+        self._show("aim_hook")
+        anchor = self._anchor()
+        if anchor is None:
+            self._drop_rope()
+            self.decide()
+            return
+        tip = self.data["tip"]
+        u = clamp(self.t / 0.3, 0, 1)
+        end = (tip[0] + (anchor[0] - tip[0]) * u, tip[1] + (anchor[1] - tip[1]) * u)
+        self.data["rope"].set_ends(tip, end, hooked=u >= 1)
+        if u >= 1:
+            self.seg = None
+            self.state, self.t = "grapple_pull", 0.0
+
+    def _st_grapple_pull(self, dt):
+        anchor = self._anchor()
+        if anchor is None:
+            self._drop_rope()
+            self.fall()
+            return
+        ax, ay, seg = anchor
+        self._show("dangle", flip=False)
+        hold = 5 * self.scale                     # her paws, just above her head
+        speed = 320 * self.scale / 2
+        self.y = max(ay + self.S - hold, self.y - speed * dt)
+        self.x += (ax - self.x) * min(1.0, dt * 6) + math.sin(self.t * 5) * 20 * dt
+        self.data["rope"].set_ends((self.x, self.y - self.S + hold), (ax, ay), hooked=True)
+        if self.y <= ay + self.S - hold + 0.5:
+            self._drop_rope()
+            self.orient = GROUND
+            self.seg = seg
+            self.x = float(clamp(ax, seg.x1 + 10, seg.x2 - 10))
+            self.y = float(seg.y)
+            self.set_state("land", 0.2)
+
+    # ---------------------------------------------------------------- portal gun
+    def open_portal(self, goal, gx, then):
+        if not self.on_ground():
+            self._pop_to_pointer()
+            return
+        s = self.seg
+        step = 34 * self.scale / 2
+        ax = clamp(self.x + self.facing * step, s.x1 + 12, s.x2 - 12)
+        if abs(ax - self.x) < step / 2:
+            self.facing = -self.facing
+            ax = clamp(self.x + self.facing * step, s.x1 + 12, s.x2 - 12)
+        bx = clamp(gx, goal.x1 + 14, goal.x2 - 14)
+        self.facing = 1 if ax >= self.x else -1
+        self.set_state("portal_aim", 0.7, ax=ax, akey=s.key, bx=bx, bkey=goal.key, then=then, made=False)
+
+    def _st_portal_aim(self, dt):
+        d = self.data
+        self._show("aim_portal")
+        if self.t > 0.3 and not d["made"]:
+            d["made"] = True
+            goal, same = self.world.find(d["bkey"], d["bx"])
+            goal = goal or (same[0] if same else None)
+            if goal is None:
+                self.decide()
+                return
+            d["pa"] = PortalWindow(self.scale, d["ax"], self.seg.y)
+            d["pb"] = PortalWindow(self.scale, d["bx"], goal.y)
+            self.portals = [d["pa"], d["pb"]]
+            self.app.sounds.play("mrrp")
+            self.raise_all()
+        if self.t > self.length:
+            pa, pb = d["pa"], d["pb"]
+
+            def enter():
+                self.hide()                       # in she goes
+                self.set_state("portal_travel", 0.35, pa=pa, pb=pb, bx=d["bx"], bkey=d["bkey"], then=d["then"])
+            self.walk_to(d["ax"], run=False, then=enter)
+
+    def _st_portal_travel(self, dt):
+        d = self.data
+        if self.t < self.length:
+            return
+        goal, same = self.world.find(d["bkey"], d["bx"])
+        goal = goal or (same[0] if same else self.world.floor_for(d["bx"]))
+        self.seg = goal
+        self.orient = GROUND
+        self.x, self.y = float(d["bx"]), float(goal.y)
+        self._place()
+        self.show()
+        self.raise_all()
+        pa, pb, then = d["pa"], d["pb"], d["then"]
+
+        def out():
+            self._close_gadgets()
+            then()
+        out_x = clamp(self.x + self.facing * 30 * self.scale / 2, goal.x1 + 10, goal.x2 - 10)
+        self.walk_to(out_x, run=False, then=out)
 
     # ---------------------------------------------------------------- bedtime
     def send_to_bed(self):
@@ -2170,6 +2435,7 @@ class Cat(Gtk.Window):
         self.app.sounds.play("mrrp")
         if self.on_ground():
             self.go_to(floor, bx, then=self._get_in_bed, fail=self._pop_into_bed)
+            return
         else:
             self._pop_into_bed()
 

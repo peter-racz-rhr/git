@@ -305,6 +305,28 @@ ORRROOOOOOOOOOOOOOOOOORRRO
 .OOOO................OOOO.
 """
 
+HOOKGUN = """
+O.O.O
+OGGGO
+.OGO.
+.ORO.
+.ORO.
+.OKO.
+.OOO.
+"""
+
+PORTALGUN = """
+.OOOO..
+OKKKGVV
+.OOOO..
+"""
+
+HOOK = """
+OGGGO
+OG.GO
+O...O
+"""
+
 COATS = {
     # key: (label, colors)
     "tabby": ("Orange tabby", dict(O="#3b2417", B="#f0a04b", S="#c4642a", L="#fbe3c0", X="#f0a04b",
@@ -322,7 +344,8 @@ COATS = {
 }
 
 COMMON = dict(R="#d9344f", W="#ffffff", H="#2f2f3a", C="#e0455a", F="#6f9fd8", Y="#e86fa8",
-              N="#f4f4f8", G="#9a9aa6", Q="#6f95d0", T="#b07a4a", U="#e7c6e8")
+              N="#f4f4f8", G="#9a9aa6", Q="#6f95d0", T="#b07a4a", U="#e7c6e8",
+              K="#3a3a44", V="#34d399", Z="#a7f3d0", A="#0f766e")
 CALICO_PATCHES = ("#e8883a", "#e8883a", "#5a4d47")
 
 
@@ -426,6 +449,38 @@ def held(head="HEAD_SAD"):
     return c, (hx, hy)
 
 
+def aiming(gun):
+    c, (hx, hy) = sitting()
+    if gun == "HOOKGUN":
+        stamp(c, "PAW_UP", hx + 8, hy + 5)
+        stamp(c, "HOOKGUN", hx + 8, hy - 2)
+    else:
+        stamp(c, "PAW_UP", hx + 7, hy + 6)
+        stamp(c, "PORTALGUN", hx + 8, hy + 6)
+    return c, (hx, hy)
+
+
+def portal(frame):
+    """A swirling oval, 12 x 22 pixels; frame 0-2 turns the swirl."""
+    import math
+    rows = []
+    for y in range(22):
+        row = []
+        for x in range(12):
+            dx, dy = (x - 5.5) / 6.0, (y - 10.5) / 11.0
+            r = dx * dx + dy * dy
+            if r > 1.0:
+                row.append(".")
+            elif r > 0.78:
+                row.append("A")
+            else:
+                angle = math.atan2(dy, dx)
+                band = int((angle / (2 * math.pi) * 3 + math.sqrt(r) * 4 + frame) * 2) % 3
+                row.append("VZN"[band] if r > 0.08 else "N")
+        rows.append(row)
+    return rows
+
+
 def build_frames():
     f = {}
     for i, legs in enumerate(LEGS_WALK):
@@ -453,6 +508,8 @@ def build_frames():
     f["held"] = held()
     f["dangle"] = held(head="HEAD")
     f["dangle_happy"] = held(head="HEAD_HAPPY")
+    f["aim_hook"] = aiming("HOOKGUN")
+    f["aim_portal"] = aiming("PORTALGUN")
     f["eat0"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=6, head_dx=1)
     f["eat1"] = standing(LEGS_STILL, head="HEAD_CLOSED", head_dy=7, head_dx=1)
     return f
