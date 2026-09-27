@@ -1387,6 +1387,8 @@ class Cat(Gtk.Window):
         notes = [s for s in self.world.segments if s.note and s.key != self.seg.key]
         if notes and (p.energy < 60 or random.random() < 0.3):
             options["go_note"] = 1.5
+        if p.energy > 30 and len(self.world.segments) > 1:
+            options["adventure"] = 1.8 if p.fun > 30 else 1.0
         total = sum(options.values())
         r = random.uniform(0, total)
         for name, weight in options.items():
@@ -1425,8 +1427,46 @@ class Cat(Gtk.Window):
                 self.set_state("sit", 3)
         elif name == "go_note":
             self._go_toward_note()
+        elif name == "adventure":
+            self._adventure()
         else:
             self.set_state("stand", 2)
+
+    def _adventure(self):
+        """Off somewhere else on the screen, by whatever it takes: jumps, climbing,
+        the grappling hook, or a portal."""
+        if not self.on_ground():
+            return
+        options = [t for t in self.world.segments
+                   if t.x2 - t.x1 >= 80 and not (t.key == self.seg.key and t.x1 <= self.x <= t.x2)]
+        if not options:
+            self.set_state("sit", 3)
+            return
+        # favour places above her: that's where the gadgets come out
+        weights = [3.0 if t.y < self.y - 150 else 1.0 for t in options]
+        goal = random.choices(options, weights)[0]
+        x = random.uniform(goal.x1 + 20, goal.x2 - 20)
+        arrive = lambda: self.set_state("sit", random.uniform(3, 8), happy=True)
+        if math.hypot(x - self.x, goal.y - self.y) > 350 and random.random() < 0.3:
+            self.open_portal(goal, x, arrive)          # why walk
+            return
+        self.go_to(goal, x, then=arrive, fail=self.decide)
+
+    def exclaim(self):
+        x, y = self.head_point()
+        Floater(text_surface("!", self.scale), x, y, rise=14 * self.scale / 2, life=0.9)
+
+    def slip(self, direction):
+        """Oops: she loses her footing and goes over the edge."""
+        self.exclaim()
+        self.set_state("slip", 0.35, dir=direction)
+
+    def _st_slip(self, dt):
+        self._show("crouch1" if int(self.anim / 0.08) % 2 else "crouch0")
+        self.x += self.data["dir"] * 30 * dt
+        if self.t > self.length:
+            self.x += self.data["dir"] * 12
+            self.fall(vx=self.data["dir"] * 40)
 
     def walk_to(self, target, run=False, then=None):
         self.facing = 1 if target > self.x else -1
@@ -1537,6 +1577,9 @@ class Cat(Gtk.Window):
         if self.t > self.length or self.pet.energy >= 99.5:
             if random.random() < 0.25:
                 self.app.sounds.play("mrrp")
+            if self.seg is not None and self.seg.kind != "floor" and random.random() < 0.08:
+                self.slip(self.facing)           # rolled over in her sleep
+                return
             self.set_state("yawn", 1.3)
 
     def _st_walk(self, dt):
@@ -1569,6 +1612,9 @@ class Cat(Gtk.Window):
             self.y = s.y - self.S / 2
             self.seg = None
             self.set_state("climb", 0, dist=0.0)
+            return
+        if s.kind in ("win", "ledge") and (at_left or at_right) and random.random() < 0.12:
+            self.slip(-1 if at_left else 1)
             return
         if s.kind == "win" and (at_left or at_right) and random.random() < 0.3:
             # hop down off the edge
@@ -1608,7 +1654,12 @@ class Cat(Gtk.Window):
             seg = None
             if key is not None:
                 seg, _same = self.world.find(key, self.x)
-            if seg is not None:
+            if seg is not None and seg.kind != "floor" and not d.get("pounce") and self.route is None \
+                    and random.random() < 0.07:
+                # just missed it
+                self.exclaim()
+                self.fall(vx=(d["x1"] - d["x0"]) / d["T"] * 0.2, vy=60)
+            elif seg is not None:
                 self.seg = seg
                 self.y = float(seg.y)
                 self.set_state("land", 0.15)
@@ -1982,6 +2033,10 @@ class Cat(Gtk.Window):
             px, py = pointer()
             goal = self.world.landing(px, py - 2, 10 ** 6) or self.world.floor_for(px)
             self.open_portal(goal, px, self.arrived)
+        elif what == "adventure":
+            self._adventure()
+        elif what == "slip":
+            self.slip(self.facing)
         elif what == "vibe":
             self.set_state("vibe", 20)
         elif what == "sad":

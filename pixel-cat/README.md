@@ -52,7 +52,10 @@ under her and she bounces once or twice before landing.
 
 On her own she walks around, sits, grooms, yawns and naps (more at night and more when
 she's tired), jumps between windows, walks along the panel, and sometimes climbs up the
-side of the screen and walks upside down along the top before dropping down. If your
+side of the screen and walks upside down along the top before dropping down. Now and then
+she goes on an **adventure** to another spot on the screen, using her grappling hook or a
+portal when that's the way to get there. She's a cat, so every so often she **slips** off an
+edge, misses a jump or rolls off a window in her sleep (don't worry: parachute or trampoline). If your
 mouse is near her, she may crouch, wiggle, and pounce on it. Her favourite nap spot is a
 Quick Notes post-it.
 
