@@ -1403,6 +1403,7 @@ class Cat(Gtk.Window):
         self.press = None
         self.stuck_since = self.lost_since = None
         self.swing = self.swing_v = self.drag_vx = 0.0     # swinging while you carry her
+        self.pad = 0                                        # extra room around her while she swings
         self.rubs = []
         self.petting_since = None
         self.grumpy_until = 0.0
@@ -1483,6 +1484,9 @@ class Cat(Gtk.Window):
         if key == self.current_key:
             return
         surface, region = self._image(key)
+        if self.pad:
+            region = region.copy()
+            region.translate(self.pad, self.pad)
         self.current, self.current_key = surface, key
         self.input_shape_combine_region(region)
         if not self.composited:
@@ -1518,6 +1522,7 @@ class Cat(Gtk.Window):
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         if self.current is not None:
+            cr.translate(self.pad, self.pad)
             if self.state == "held" and self.composited and abs(self.swing) > 0.003:
                 # swing from where the pointer holds her (the scruff of her neck)
                 px, py = self.S / 2, 3 * self.scale
@@ -1539,7 +1544,7 @@ class Cat(Gtk.Window):
             wx, wy = self.x, self.y - S / 2
         else:
             wx, wy = self.x - S / 2, self.y
-        pos = (int(round(wx)), int(round(wy)))
+        pos = (int(round(wx - self.pad)), int(round(wy - self.pad)))
         if pos != self.pos:
             self.pos = pos
             self.move(*pos)
@@ -1583,7 +1588,21 @@ class Cat(Gtk.Window):
         Floater(sprites.render(sprites.PARTS["POOF"], "tabby", self.scale * 2), x, y, rise=10, life=0.6)
 
     # ---------------------------------------------------------------- state machine
+    def _set_pad(self, pad):
+        """A bigger window while she's carried, so she has room to swing."""
+        if pad == self.pad:
+            return
+        self.pad = pad
+        self.resize(self.S + 2 * pad, self.S + 2 * pad)
+        self.pos = None
+        self.current_key = None
+        self._place()
+
     def set_state(self, name, length=0.0, **data):
+        if name == "held" and self.state != "held" and self.composited:
+            self._set_pad(int(self.S * 0.35))
+        elif name != "held" and self.pad:
+            self._set_pad(0)
         if self.chute is not None and name != "fall":
             self._close_chute()
         if self.state == "fall" and name != "fall" and self.data.get("tramp"):
@@ -2309,9 +2328,9 @@ class Cat(Gtk.Window):
         d["last_x"] = self.x
         speed = (self.x - last_x) / max(dt, 0.001)
         self.drag_vx += (speed - self.drag_vx) * min(1.0, dt * 10)
-        target = clamp(math.atan(self.drag_vx * 0.0012 / self.scale) * 0.8, -0.22, 0.22)
-        self.swing_v += (130.0 * (target - self.swing) - 3.2 * self.swing_v) * dt
-        self.swing = clamp(self.swing + self.swing_v * dt, -0.28, 0.28)
+        target = clamp(math.atan(self.drag_vx * 0.0018 / self.scale), -0.5, 0.5)
+        self.swing_v += (110.0 * (target - self.swing) - 2.6 * self.swing_v) * dt
+        self.swing = clamp(self.swing + self.swing_v * dt, -0.62, 0.62)
         # legs: paddling while she moves fast, a short burst of kicks now and then otherwise
         now = self.t
         if abs(self.drag_vx) > 250 * self.scale / 2:
@@ -2622,6 +2641,10 @@ class Cat(Gtk.Window):
             x0, y0, x1, _y1 = self.world.bounds
             self.x, self.y = float((x0 + x1) / 2), float(y0 + self.S + 10)
         self.state, self.t, self.length, self.data, self.anim = "fall", 0.0, 0.0, {}, 0.0
+        try:
+            self._set_pad(0)
+        except Exception:
+            pass
         if self.hidden:
             self.hidden = False
         self.show()
