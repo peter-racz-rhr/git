@@ -1663,10 +1663,11 @@ class Cat(Gtk.Window):
 
     def _debug(self, now):
         """Writes what she's doing to $PIXEL_CAT_DEBUG (for testing)."""
-        if DEBUG_FILE and now - getattr(self, "_debug_at", 0) > 0.3:
+        if DEBUG_FILE and now - getattr(self, "_debug_at", 0) > float(os.environ.get("PIXEL_CAT_DEBUG_EVERY", 0.3)):
             self._debug_at = now
             with open(DEBUG_FILE, "w") as f:
-                json.dump({"state": self.state, "hidden": self.hidden, "chute": self.chute is not None,
+                json.dump({"state": self.state, "frame": self.current_key[0] if self.current_key else None,
+                           "hidden": self.hidden, "chute": self.chute is not None,
                            "tramp": bool(self.data.get("tramp")), "x": int(self.x), "y": int(self.y), "orient": self.orient,
                            "seg": str(self.seg.key) if self.seg else None, "headset": self.headset,
                            "win": self.pos, "props": [(p.kind, int(p.x), int(p.y), p.landed, int(p.vx), str(p.seg_key)) for p in self.props], "data": {k: v for k, v in self.data.items() if isinstance(v, (int, float, str))},
@@ -2097,6 +2098,10 @@ class Cat(Gtk.Window):
                 return
         self.decide()
 
+    def _wiggle(self):
+        """Getting ready to pounce: a slow butt wiggle."""
+        return "crouch1" if int(self.anim / 0.28) % 2 else "crouch0"
+
     def _st_crouch_jump(self, dt):
         self._show("crouch0")
         if self.t > self.length:
@@ -2291,7 +2296,7 @@ class Cat(Gtk.Window):
     def _st_stalk(self, dt):
         px, py = pointer()
         self.facing = 1 if px > self.x else -1
-        self._show("crouch0" if int(self.anim / 0.12) % 2 == 0 else "crouch1")
+        self._show(self._wiggle())
         if self.t > self.length:
             if not self.on_ground():
                 self.decide()
@@ -2372,18 +2377,34 @@ class Cat(Gtk.Window):
             self.set_state("sit", random.uniform(3, 6), happy=True)
             return
         if not yarn.landed:
-            self._show("crouch0" if int(self.anim / 0.12) % 2 == 0 else "crouch1")
+            self.facing = 1 if yarn.x > self.x else -1
+            self._show("crouch0")              # eyes on the yarn while it flies
             return
-        gap = yarn.x - self.x
-        self.facing = 1 if gap > 0 else -1
-        if abs(gap) > 12 * self.scale:
+        s = self.seg
+        target = clamp(yarn.x, s.x1 + 10, s.x2 - 10) if s is not None else yarn.x
+        gap = target - self.x
+        self.facing = 1 if yarn.x > self.x else -1
+        rolling = abs(yarn.vx) >= 30
+        if abs(gap) > 12 * self.scale or rolling:
+            # after it; while it rolls she keeps walking along with it (no stopping and starting)
             speed = 150 * self.scale / 2
-            self.x += clamp(gap, -speed * dt, speed * dt)
-            self.data["dist"] = self.data.get("dist", 0) + speed * dt
+            step = clamp(gap, -speed * dt, speed * dt)
+            self.x += step
+            self.data["dist"] = self.data.get("dist", 0) + max(abs(step), speed * dt * 0.4)
+            self.data["ready"] = 0.0
             self._show(self._walk_frame(2 * self.scale))
+        elif s is not None and yarn.seg_key != s.key:
+            # the yarn went onto another window (or the floor): jump after it
+            if now_ok(self.data, "yarn_hop", 1.0):
+                self.jump_to(yarn.x, yarn.y, yarn.seg_key)
+            else:
+                self._show("crouch0")
         else:
+            # crouch a moment, then bat it
+            self.data["ready"] = self.data.get("ready", 0.0) + dt
             self._show("crouch1")
-            if abs(yarn.vx) < 30:
+            if self.data["ready"] > 0.35:
+                self.data["ready"] = 0.0
                 yarn.vx = random.uniform(140, 260) * random.choice((-1, 1)) * self.scale / 2
                 self.data["bats"] -= 1
 
@@ -2994,17 +3015,28 @@ class Cat(Gtk.Window):
         gap = bf.x - self.x
         self.facing = 1 if gap > 0 else -1
         target = clamp(bf.x, self.seg.x1 + 10, self.seg.x2 - 10)
-        if abs(target - self.x) > 26 * self.scale / 2:
+        # once crouched she stays crouched until it has really moved away
+        reach = (44 if self.data.get("crouch", 0.0) > 0 else 26) * self.scale / 2
+        if abs(target - self.x) > reach:
             speed = 150 * self.scale / 2
             self.x += clamp(target - self.x, -speed * dt, speed * dt)
             self.data["dist"] = self.data.get("dist", 0) + speed * dt
             self._show(self._walk_frame(2 * self.scale))
             self.data["crouch"] = 0.0
             return
+        if bf.y + 10 * self.scale < self.y - 240:
+            # too high to reach: sit and watch it (and give up after a while)
+            self.data["crouch"] = 0.0
+            self.data["watch"] = self.data.get("watch", 0.0) + dt
+            self._show("sit")
+            if self.data["watch"] > 6:
+                self.butterfly.leave()
+                self.set_state("sit", random.uniform(3, 6), happy=True)
+            return
         # under it: wiggle, then leap
         self.data["crouch"] = self.data.get("crouch", 0.0) + dt
-        self._show("crouch0" if int(self.anim / 0.1) % 2 == 0 else "crouch1")
-        if self.data["crouch"] > 0.7:
+        self._show(self._wiggle())
+        if self.data["crouch"] > 0.9:
             self.bf_tries += 1
             if self.bf_tries > 3:
                 self.butterfly.settle_on(self) if random.random() < 0.35 else self.butterfly.leave()
@@ -3198,8 +3230,10 @@ class Cat(Gtk.Window):
             self.x += clamp(gap, -speed * dt, speed * dt)
             self.data["dist"] = self.data.get("dist", 0) + speed * dt
             self._show(self._walk_frame(2 * self.scale))
+        elif py < self.y - 200:
+            self._show("sit")                   # out of reach: she just watches it
         else:
-            self._show("crouch0" if int(self.anim / 0.1) % 2 == 0 else "crouch1")
+            self._show(self._wiggle())
         # pounce when the dot is just above her
         if abs(px - self.x) < 50 and self.y - 200 < py < self.y - 20 and now_ok(self.data, "pounce", 1.2):
             self.jump_to(px, clamp(py + 10 * self.scale, self.y - 200, self.y), None, pounce=True)
