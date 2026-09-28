@@ -1441,7 +1441,7 @@ class Cat(Gtk.Window):
         self.cache.clear()
         self.current_key = None
         if self.art is not sprites.STYLES[self.pet.style]:
-            # switched between classic and detailed: a different window size
+            # switched to another style: a different window size
             self.art = sprites.STYLES[self.pet.style]
             self.S = max(self.art.W, self.art.H) * self.scale
             self.set_default_size(self.S, self.S)
@@ -1489,8 +1489,8 @@ class Cat(Gtk.Window):
         self.queue_draw()
 
     def prop_scale(self):
-        """Her bed, box, parachute ... grow with her for the detailed style."""
-        return self.scale + (1 if self.art.name == "detailed" else 0)
+        """Her bed, box, parachute ... grow with her for the bigger styles."""
+        return self.scale + (0 if self.art.name == "classic" else 1)
 
     def _dress(self, name):
         """What she's wearing on top of this frame: scarf, hat, headset, umbrella, a letter."""
@@ -3634,7 +3634,8 @@ class SetupWindow(Gtk.Window):
         styles.get_style_context().add_class("linked")
         styles.set_halign(Gtk.Align.CENTER)
         first_button = None
-        for key, label in (("classic", "Classic (48 px)"), ("detailed", "Detailed (64 px)")):
+        for key, label in (("classic", "Classic (48 px)"), ("detailed", "Detailed (64 px)"),
+                           ("cute", "Cute (60 px)")):
             b = Gtk.RadioButton.new_with_label_from_widget(first_button, label)
             first_button = first_button or b
             b.set_mode(False)
@@ -3644,8 +3645,8 @@ class SetupWindow(Gtk.Window):
         box.pack_start(styles, False, False, 0)
 
         self.preview = Gtk.DrawingArea()
-        big = sprites.STYLES["detailed"]
-        self.preview.set_size_request(big.W * 5 + 40, big.H * 5 + 10)
+        self.preview.set_size_request(max(a.W for a in sprites.STYLES.values()) * 5 + 40,
+                                      max(a.H for a in sprites.STYLES.values()) * 5 + 10)
         self.preview.get_style_context().add_class("pc-preview")
         self.preview.connect("draw", self._draw_preview)
         box.pack_start(self.preview, False, False, 0)

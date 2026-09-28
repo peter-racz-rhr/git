@@ -1252,6 +1252,357 @@ def d_with_extra(frame, extra):
     return c, (hx, hy)
 
 
+# ==========================================================================
+# the cute style: a big round head with big shiny eyes on a small body
+# (about 60 px wide at normal size)
+# ==========================================================================
+
+C_HW = 30               # head grid width (the outer 2 columns are whiskers)
+
+
+def c_head(eyes="open", mouth="w", ears="up"):
+    shape = {3: (4, 25), 4: (3, 26), 5: (3, 26), 6: (2, 27), 7: (2, 27), 8: (2, 27), 9: (2, 27),
+             10: (2, 27), 11: (2, 27), 12: (2, 27), 13: (2, 27), 14: (3, 26), 15: (5, 24)}
+    if ears == "up":
+        ear_rows = {0: [(5, 6), (23, 24)], 1: [(4, 7), (22, 25)], 2: [(4, 8), (21, 25)]}
+        pink = ((5, 1), (6, 1), (5, 2), (6, 2), (7, 2), (23, 1), (24, 1), (22, 2), (23, 2), (24, 2),
+                (6, 3), (23, 3))
+    else:                                   # low, sad ears
+        ear_rows = {1: [(3, 5), (24, 26)], 2: [(3, 8), (21, 26)]}
+        pink = ((4, 2), (5, 2), (24, 2), (25, 2))
+    inside = {(x, y) for y, (a, b) in shape.items() for x in range(a, b + 1)}
+    for y, spans in ear_rows.items():
+        for a, b in spans:
+            inside |= {(x, y) for x in range(a, b + 1)}
+    h = [["."] * C_HW for _ in range(16)]
+    for (x, y) in inside:
+        edge = any((x + dx, y + dy) not in inside for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        h[y][x] = "O" if edge else "B"
+    for x, y in pink:
+        if h[y][x] == "B":
+            h[y][x] = "P"
+    for x, y in ((13, 4), (14, 4), (15, 4), (16, 4), (14, 5), (15, 5), (3, 7), (26, 7), (3, 8), (26, 8)):
+        h[y][x] = "S"
+    for x in range(6, 24):
+        h[14][x] = "L"
+    for x in range(10, 20):
+        h[13][x] = h[14][x] = "M"
+    shapes = {
+        "open": [".OOOOO.",
+                 "OWWKKKO",
+                 "OWWKKKO",
+                 "OKKKKKO",
+                 "OKEEEKO",
+                 "OEEEEWO",
+                 ".OOOOO."],
+        "happy": [".......",
+                  ".......",
+                  "...O...",
+                  "..O.O..",
+                  ".O...O.",
+                  ".......",
+                  "......."],
+        "closed": [".......",
+                   ".......",
+                   ".......",
+                   ".O...O.",
+                   "..OOO..",
+                   ".......",
+                   "......."],
+    }
+    for ex in (5, 18):
+        for j, row in enumerate(shapes[eyes]):
+            for i, ch in enumerate(row):
+                if ch != ".":
+                    h[6 + j][ex + i] = ch
+    if ears == "flat":                      # worried brows
+        h[5][6], h[5][7], h[4][8] = "O", "O", "O"
+        h[5][23], h[5][22], h[4][21] = "O", "O", "O"
+    for x in (4, 5, 24, 25):
+        h[13][x] = "P"
+    h[12][14] = h[12][15] = "P"
+    if mouth == "w":
+        h[13][13] = h[13][16] = "O"
+        h[14][14] = h[14][15] = "O"
+    elif mouth == "smile":
+        h[13][13] = h[13][16] = "O"
+        h[14][14] = h[14][15] = "R"
+    elif mouth == "sad":
+        h[14][13] = h[14][16] = "O"
+        h[13][14] = h[13][15] = "O"
+    elif mouth == "yawn":
+        h[13][13] = h[13][16] = "O"
+        h[14][13] = h[14][16] = "O"
+        h[13][14] = h[13][15] = h[14][14] = h[14][15] = "R"
+    for y in (11, 13):
+        h[y][0] = h[y][1] = h[y][28] = h[y][29] = "O"
+    return h
+
+
+def _rows(text):
+    g = grid(text)
+    assert len({len(r) for r in g}) == 1, text
+    return g
+
+
+C_PARTS = dict(
+    HEAD=c_head(),
+    HEAD_CLOSED=c_head("closed"),
+    HEAD_HAPPY=c_head("happy", "smile"),
+    HEAD_SAD=c_head("open", "sad", ears="flat"),
+    HEAD_YAWN=c_head("closed", "yawn"),
+    BODY=_rows("""
+.OOOOOOOOOOOOOOOOOO.
+OBBSBBBSBBBSBBBBBBBO
+ODBSBBBSBBBSBBBBBBBO
+ODBBBBBBBBBBBBBBBBBO
+ODDBBBBBBBBBBBBBBBBO
+ODLLLLLLLLLLLLLLLLLO
+.OOOOOOOOOOOOOOOOOO.
+"""),
+    LEG=_rows("""
+OXXO
+OXXO
+OXXO
+OOOO
+"""),
+    LEG_SHORT=_rows("""
+OXXO
+OOOO
+"""),
+    SIT_BODY=_rows("""
+..OOOOOOOOOOOO..
+.OBBBBBBBBBBBBO.
+OBBBLLLLLLLLBBBO
+ODBLLLLLLLLLLBBO
+ODBLLLLLLLLLLBBO
+ODBBLLLLLLLLBBBO
+OBOXXXOBBOXXXOBO
+.OOOOOOOOOOOOOO.
+"""),
+    TAIL_SIT=_rows("""
+......OO
+.OOOOOXO
+OBBBBBXO
+.OOOOOO.
+"""),
+    TAIL_SIT2=_rows("""
+......OO.
+......OXO
+.OOOOOOXO
+OBBBBBBBO
+.OOOOOOO.
+"""),
+    LOAF=_rows("""
+...OOOOOOOOOOOOOOOOOOOO...
+.OOBBSBBBSBBBSBBBSBBBBBOO.
+ODBBBSBBBSBBBSBBBSBBBBBBBO
+ODBBBBBBBBBBBBBBBBBBBBBBBO
+ODBOOOOOOOOOOOOOBBBBBBBBBO
+OXXBBBBBBBBBBBBBOBBBBBBXXO
+.OOOOOOOOOOOOOOOOOOOOOOOO.
+"""),
+    HEADSET=_rows("""
+.........HHHHHHHHHHHH.........
+......HHH............HHH......
+...HH....................HH...
+..H........................H..
+.H..........................H.
+.H..........................H.
+.H..........................H.
+"""),
+    CUP=_rows("""
+OOO
+CCO
+CCO
+CCO
+CCO
+OOO
+"""),
+    GLASSES=_rows("""
+.GGGGG......GGGGG.
+G.....G....G.....G
+G.....GGGGGG.....G
+G.....G....G.....G
+G.....G....G.....G
+G.....G....G.....G
+.GGGGG......GGGGG.
+"""),
+    SCARF=_rows("""
+ORWRWRWRWRWRWRWRWRWRWO
+.OOOOORWOOOOOOOOOOOOO.
+......ORO.............
+......OWO.............
+.......O..............
+"""),
+)
+
+C_W, C_DRAW_H, C_H = 40, 30, 38
+C_BODY_PARTS = {"BODY", "SIT_BODY", "LOAF", "HELD_BODY"}
+C_LEGS_STILL = [(5, 0, 0), (9, 0, 0), (15, 0, 0), (19, 0, 0)]
+C_LEGS_WALK = [
+    C_LEGS_STILL,
+    [(5, -1, 0), (9, 1, 1), (15, 1, 1), (19, -1, 0)],
+    C_LEGS_STILL,
+    [(5, 1, 1), (9, -1, 0), (15, -1, 0), (19, 1, 1)],
+]
+
+
+def _c(name):
+    return C_PARTS.get(name) or D_PARTS.get(name) or PARTS[name]
+
+
+def c_stamp(canvas, name, x, y):
+    part = _c(name) if isinstance(name, str) else name
+    body = isinstance(name, str) and name in C_BODY_PARTS
+    for r, row in enumerate(part):
+        for c, ch in enumerate(row):
+            if ch != "." and 0 <= y + r < len(canvas) and 0 <= x + c < len(canvas[0]):
+                canvas[y + r][x + c] = ch.lower() if body and ch in "BSLD" else ch
+    return canvas
+
+
+def c_blank():
+    return [["." for _ in range(C_W)] for _ in range(C_DRAW_H)]
+
+
+def c_standing(legs, head="HEAD", tail="TAIL_UP", head_dy=0, head_dx=0):
+    c = c_blank()
+    c_stamp(c, tail, 0, 9)
+    c_stamp(c, "BODY", 3, 19)
+    for x, dx, lift in legs:
+        c_stamp(c, "LEG", x + dx, 26 - lift)
+    hx, hy = 9 + head_dx, 4 + head_dy
+    c_stamp(c, head, hx, hy)
+    return c, (hx, hy)
+
+
+def c_sitting(head="HEAD", tail="TAIL_SIT", head_dy=0, paw=None):
+    c = c_blank()
+    c_stamp(c, "SIT_BODY", 12, 22)
+    tail_part = _c(tail)
+    c_stamp(c, tail, 24, C_DRAW_H - len(tail_part))
+    hx, hy = 5, 7 + head_dy
+    c_stamp(c, head, hx, hy)
+    if paw:
+        c_stamp(c, "PAW_UP", hx + paw[0], hy + paw[1])
+    return c, (hx, hy)
+
+
+def c_loaf(head="HEAD_CLOSED", head_dy=0):
+    c = c_blank()
+    c_stamp(c, "LOAF", 6, 23)
+    hx, hy = 4, 10 + head_dy
+    c_stamp(c, head, hx, hy)
+    return c, (hx, hy)
+
+
+def c_crouch(wiggle=0):
+    c = c_blank()
+    c_stamp(c, "TAIL_BACK", 0 + wiggle, 21)
+    c_stamp(c, "BODY", 3 + wiggle, 22)
+    for x, dx, _lift in C_LEGS_STILL:
+        c_stamp(c, "LEG_SHORT", x + dx + wiggle, 28)
+    hx, hy = 9, 11
+    c_stamp(c, "HEAD", hx, hy)
+    return c, (hx, hy)
+
+
+def c_jumping():
+    c = c_blank()
+    c_stamp(c, "TAIL_BACK", 0, 16)
+    c_stamp(c, "BODY", 3, 17)
+    for x, dx in ((5, -2), (9, -1), (15, 1), (19, 2)):
+        c_stamp(c, "LEG", x + dx, 23)
+    hx, hy = 9, 4
+    c_stamp(c, "HEAD", hx, hy)
+    return c, (hx, hy)
+
+
+def c_held(head="HEAD_SAD"):
+    c = c_blank()
+    c_stamp(c, "TAIL_DOWN", 11, 17)
+    c_stamp(c, "HELD_BODY", 14, 12)
+    c_stamp(c, "LEG", 14, 23)
+    c_stamp(c, "LEG", 22, 23)
+    c_stamp(c, "PAW_UP", 25, 13)
+    hx, hy = 5, 0
+    c_stamp(c, head, hx, hy)
+    return c, (hx, hy)
+
+
+def c_build_frames():
+    f = {}
+    for i, legs in enumerate(C_LEGS_WALK):
+        f[f"walk{i}"] = c_standing(legs, tail="TAIL_UP" if i < 2 else "TAIL_UP2")
+    f["stand"] = c_standing(C_LEGS_STILL)
+    f["stand2"] = c_standing(C_LEGS_STILL, tail="TAIL_UP2")
+    f["stand_sad"] = c_standing(C_LEGS_STILL, head="HEAD_SAD", tail="TAIL_UP2")
+    f["sit"] = c_sitting()
+    f["sit_tail"] = c_sitting(tail="TAIL_SIT2")
+    f["sit_blink"] = c_sitting(head="HEAD_CLOSED")
+    f["sit_bob"] = c_sitting(head_dy=1, tail="TAIL_SIT2")
+    f["sit_bob_closed"] = c_sitting(head="HEAD_CLOSED", head_dy=1)
+    f["sit_happy"] = c_sitting(head="HEAD_HAPPY")
+    f["sit_happy2"] = c_sitting(head="HEAD_HAPPY", head_dy=1, tail="TAIL_SIT2")
+    f["sit_sad"] = c_sitting(head="HEAD_SAD")
+    f["sit_sad2"] = c_sitting(head="HEAD_SAD", tail="TAIL_SIT2")
+    f["yawn"] = c_sitting(head="HEAD_YAWN")
+    f["groom0"] = c_sitting(head="HEAD_CLOSED", paw=(18, 10))
+    f["groom1"] = c_sitting(head="HEAD_CLOSED", head_dy=1, paw=(18, 10))
+    f["sleep0"] = c_loaf()
+    f["sleep1"] = c_loaf(head_dy=1)
+    f["crouch0"] = c_crouch()
+    f["crouch1"] = c_crouch(1)
+    f["jump"] = c_jumping()
+    f["held"] = c_held()
+    f["dangle"] = c_held("HEAD")
+    f["dangle_happy"] = c_held("HEAD_HAPPY")
+    f["tap"] = c_sitting(paw=(26, 14))
+    c, (hx, hy) = c_sitting(paw=(24, 6))
+    c_stamp(c, "HOOKGUN", hx + 23, hy - 1)
+    f["aim_hook"] = (c, (hx, hy))
+    c, (hx, hy) = c_sitting(paw=(24, 11))
+    c_stamp(c, "PORTALGUN", hx + 25, hy + 11)
+    f["aim_portal"] = (c, (hx, hy))
+    f["eat0"] = c_standing(C_LEGS_STILL, head="HEAD_CLOSED", head_dy=9, head_dx=1)
+    f["eat1"] = c_standing(C_LEGS_STILL, head="HEAD_CLOSED", head_dy=10, head_dx=1)
+    f["stretch"] = c_standing([(5, 0, 0), (9, 0, 0), (15, 3, 0), (19, 3, 0)], head="HEAD_CLOSED",
+                              head_dy=7, head_dx=2, tail="TAIL_UP2")
+    for page in (0, 1):
+        c, (hx, hy) = c_sitting(head_dy=page)
+        c_stamp(c, "GLASSES", hx + 5, hy + 6)
+        c_stamp(c, "BOOK" if page == 0 else "BOOK2", hx + 9, hy + 15 + page)
+        f[f"study{page}"] = (c, (hx, hy))
+    c, (hx, hy) = c_standing(C_LEGS_STILL)
+    c_stamp(c, "ENVELOPE", hx + 11, hy + 13)
+    f["carry"] = (c, (hx, hy))
+    pad = C_H - C_DRAW_H
+    return {name: ([["."] * C_W for _ in range(pad)] + canvas, (hx, hy + pad))
+            for name, (canvas, (hx, hy)) in f.items()}
+
+
+C_CUP_RIGHT = [row[::-1] for row in C_PARTS["CUP"]]
+C_OVERLAYS = {
+    "scarf": ("SCARF", 4, 14), "umbrella": ("UMBRELLA", 4, -9), "envelope": ("ENVELOPE", 11, 13),
+    "hat:santa": ("SANTAHAT", 8, -2), "hat:pumpkin": ("PUMPKIN", 11, -1), "hat:party": ("PARTYHAT", 12, -2),
+    "nightcap": ("NIGHTCAP", 8, -2), "broom0": ("BROOM", 18, 11), "broom1": ("BROOM", 21, 11),
+}
+
+
+def c_with_extra(frame, extra):
+    canvas, (hx, hy) = frame
+    c = [row[:] for row in canvas]
+    if extra == "headset":
+        c_stamp(c, "HEADSET", hx, hy - 2)
+        c_stamp(c, "CUP", hx, hy + 6)
+        c_stamp(c, C_CUP_RIGHT, hx + 27, hy + 6)
+    elif extra in C_OVERLAYS:
+        part, dx, dy = C_OVERLAYS[extra]
+        c_stamp(c, part, hx + dx, hy + dy)
+    return c, (hx, hy)
+
+
 class Style:
     def __init__(self, name, w, h, frames, with_extra, with_nightcap, gun_tips, dangle_top):
         self.name, self.W, self.H, self.FRAMES = name, w, h, frames
@@ -1266,5 +1617,9 @@ STYLES = {
     "detailed": Style("detailed", D_W, D_H, d_build_frames(), d_with_extra,
                       lambda fr: d_with_extra(fr, "nightcap"),
                       {"aim_hook": (15, -1), "aim_portal": (20, 11)}, None),
+    "cute": Style("cute", C_W, C_H, c_build_frames(), c_with_extra,
+                  lambda fr: c_with_extra(fr, "nightcap"),
+                  {"aim_hook": (25, -1), "aim_portal": (31, 12)}, None),
 }
 STYLES["detailed"].dangle_top = STYLES["detailed"].FRAMES["dangle"][1][1]
+STYLES["cute"].dangle_top = STYLES["cute"].FRAMES["dangle"][1][1]

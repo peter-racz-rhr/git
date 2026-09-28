@@ -9,6 +9,8 @@ headset and bobs her head.
 
 ![Classic and detailed style](../docs/screenshots/pixel-cat-styles.png)
 
+![The cute style](../docs/screenshots/pixel-cat-cute.png)
+
 ![What she does](../docs/screenshots/pixel-cat-showcase.png)
 
 ![Parachute, climbing, bedtime and exploring](../docs/screenshots/pixel-cat-more.png)
@@ -26,8 +28,9 @@ cd pixel-cat
 ./install.sh
 ```
 
-The first time, a small window opens. Pick her style (**Classic**, about 48 px, or
-**Detailed**, about 64 px with bigger shiny eyes, whiskers and shading), her coat (orange
+The first time, a small window opens. Pick her style (**Classic**, about 48 px;
+**Detailed**, about 64 px with bigger shiny eyes, whiskers and shading; or **Cute**, about
+60 px, with a big round head, huge sparkly eyes and blushing cheeks), her coat (orange
 tabby, black, grey & white, white, calico or siamese) and give her a name. Then she drops onto your desktop.
 
 The installer also:
