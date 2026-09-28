@@ -48,7 +48,7 @@ Uninstall with `./uninstall.sh` (add `--forget` to also forget her name and mood
 |---|---|
 | Rub the mouse back and forth over her | purrs, closes her eyes, and pixel hearts float up |
 | Click her | a heart |
-| Drag her | dangles from your pointer; let go (or throw her) and she lands on her feet |
+| Drag her | dangles from your pointer, swings behind as you carry her, wobbles when you stop and paddles her legs; let go (or throw her) and she lands on her feet |
 | Move a window she's sitting on | rides along, smoothly |
 | Close or minimize that window | falls and lands on whatever is below |
 | **Ctrl+Alt+C** | comes to your mouse: she runs, jumps from window to window and climbs up window sides to get there. A window floating high up? Out comes her **grappling hook**. Far away or no way by paw? She opens two **portals** and walks through |

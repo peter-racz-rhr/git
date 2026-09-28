@@ -600,13 +600,14 @@ def jumping():
     return c, (hx, hy)
 
 
-def held(head="HEAD_SAD"):
+def held(head="HEAD_SAD", kick=False):
+    """Hanging from your pointer; kick=True: paddling her legs."""
     c = blank()
-    stamp(c, "TAIL_DOWN", 6, 13)
+    stamp(c, "TAIL_DOWN", 7 if kick else 6, 13)
     stamp(c, "HELD_BODY", 9, 8)
-    stamp(c, "LEG", 9, 16)
-    stamp(c, "LEG", 14, 16)
-    stamp(c, "LEG_SHORT", 15, 11)
+    stamp(c, "LEG", 9, 15 if kick else 16)
+    stamp(c, "LEG", 14, 17 if kick else 16)
+    stamp(c, "LEG_SHORT", 15, 10 if kick else 11)
     hx, hy = 8, 1
     stamp(c, head, hx, hy)
     return c, (hx, hy)
@@ -688,6 +689,7 @@ def build_frames():
     f["crouch1"] = crouch(wiggle=1)
     f["jump"] = jumping()
     f["held"] = held()
+    f["held_kick"] = held(kick=True)
     f["dangle"] = held(head="HEAD")
     f["dangle_happy"] = held(head="HEAD_HAPPY")
     f["tap"] = tapping()
@@ -1168,13 +1170,13 @@ def d_jumping():
     return c, (hx, hy)
 
 
-def d_held(head="HEAD_SAD"):
+def d_held(head="HEAD_SAD", kick=False):
     c = d_blank()
-    d_stamp(c, "TAIL_DOWN", 9, 17)
+    d_stamp(c, "TAIL_DOWN", 10 if kick else 9, 17)
     d_stamp(c, "HELD_BODY", 14, 11)
-    d_stamp(c, "LEG", 14, 22)
+    d_stamp(c, "LEG", 14, 20 if kick else 22)
     d_stamp(c, "LEG", 21, 22)
-    d_stamp(c, "LEG_SHORT", 23, 14)
+    d_stamp(c, "LEG_SHORT", 23, 13 if kick else 14)
     hx, hy = 11, 0
     d_stamp(c, head, hx, hy)
     return c, (hx, hy)
@@ -1205,6 +1207,7 @@ def d_build_frames():
     f["crouch1"] = d_crouch(1)
     f["jump"] = d_jumping()
     f["held"] = d_held()
+    f["held_kick"] = d_held(kick=True)
     f["dangle"] = d_held("HEAD")
     f["dangle_happy"] = d_held("HEAD_HAPPY")
     f["tap"] = d_sitting(paw=(15, 14))
@@ -1519,13 +1522,13 @@ def c_jumping():
     return c, (hx, hy)
 
 
-def c_held(head="HEAD_SAD"):
+def c_held(head="HEAD_SAD", kick=False):
     c = c_blank()
-    c_stamp(c, "TAIL_DOWN", 11, 17)
+    c_stamp(c, "TAIL_DOWN", 12 if kick else 11, 17)
     c_stamp(c, "HELD_BODY", 14, 12)
-    c_stamp(c, "LEG", 14, 23)
-    c_stamp(c, "LEG", 22, 23)
-    c_stamp(c, "PAW_UP", 25, 13)
+    c_stamp(c, "LEG", 14, 21 if kick else 23)
+    c_stamp(c, "LEG", 22, 24 if kick else 23)
+    c_stamp(c, "PAW_UP", 25, 12 if kick else 13)
     hx, hy = 5, 0
     c_stamp(c, head, hx, hy)
     return c, (hx, hy)
@@ -1556,6 +1559,7 @@ def c_build_frames():
     f["crouch1"] = c_crouch(1)
     f["jump"] = c_jumping()
     f["held"] = c_held()
+    f["held_kick"] = c_held(kick=True)
     f["dangle"] = c_held("HEAD")
     f["dangle_happy"] = c_held("HEAD_HAPPY")
     f["tap"] = c_sitting(paw=(26, 14))

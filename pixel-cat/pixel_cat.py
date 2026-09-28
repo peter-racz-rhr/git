@@ -1402,6 +1402,7 @@ class Cat(Gtk.Window):
         self.props = []
         self.press = None
         self.stuck_since = self.lost_since = None
+        self.swing = self.swing_v = self.drag_vx = 0.0     # swinging while you carry her
         self.rubs = []
         self.petting_since = None
         self.grumpy_until = 0.0
@@ -1495,12 +1496,12 @@ class Cat(Gtk.Window):
     def _dress(self, name):
         """What she's wearing on top of this frame: scarf, hat, headset, umbrella, a letter."""
         out = []
-        upright = name not in ("held", "dangle", "dangle_happy", "jump") and self.orient == GROUND
+        upright = name not in ("held", "held_kick", "dangle", "dangle_happy", "jump") and self.orient == GROUND
         weather = self.app.weather.kind if self.pet.weather else None
-        if weather == "snow" and name not in ("held",):
+        if weather == "snow" and not name.startswith("held"):
             out.append("scarf")
         hat = self.pet.hat()
-        if self.headset and name != "held":
+        if self.headset and not name.startswith("held"):
             out.append("headset")
         elif hat:
             out.append("hat:" + hat)
@@ -1517,7 +1518,14 @@ class Cat(Gtk.Window):
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
         if self.current is not None:
+            if self.state == "held" and self.composited and abs(self.swing) > 0.003:
+                # swing from where the pointer holds her (the scruff of her neck)
+                px, py = self.S / 2, 3 * self.scale
+                cr.translate(px, py)
+                cr.rotate(self.swing)
+                cr.translate(-px, -py)
             cr.set_source_surface(self.current, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_NEAREST)
             cr.paint()
         return True
 
@@ -2294,7 +2302,28 @@ class Cat(Gtk.Window):
             self.set_state("sit", random.uniform(3, 7), happy=True)
 
     def _st_held(self, dt):
-        self._show("held", flip=False)
+        """Hanging from your pointer: she swings behind when you move her, wobbles when you
+        stop, and paddles her legs now and then (faster while she's moving)."""
+        d = self.data
+        last_x = d.get("last_x", self.x)
+        d["last_x"] = self.x
+        speed = (self.x - last_x) / max(dt, 0.001)
+        self.drag_vx += (speed - self.drag_vx) * min(1.0, dt * 10)
+        target = clamp(math.atan(self.drag_vx * 0.0012 / self.scale) * 0.8, -0.22, 0.22)
+        self.swing_v += (130.0 * (target - self.swing) - 3.2 * self.swing_v) * dt
+        self.swing = clamp(self.swing + self.swing_v * dt, -0.28, 0.28)
+        # legs: paddling while she moves fast, a short burst of kicks now and then otherwise
+        now = self.t
+        if abs(self.drag_vx) > 250 * self.scale / 2:
+            d["kick_until"] = now + 0.3
+        elif now > d.get("next_kick", 0.6):
+            d["kick_until"] = now + random.uniform(0.5, 0.9)
+            d["next_kick"] = now + random.uniform(1.4, 3.0)
+        kicking = now < d.get("kick_until", 0) and int(now / 0.14) % 2 == 0
+        self._show("held_kick" if kicking else "held", flip=False)
+        if abs(self.swing - d.get("drawn_swing", 0.0)) > 0.002:
+            d["drawn_swing"] = self.swing
+            self.queue_draw()
 
     def _st_vibe(self, dt):
         beat = 0.45
@@ -2429,6 +2458,7 @@ class Cat(Gtk.Window):
                     self.orient = GROUND
                     self.seg = None
                     self.petting_since = None
+                    self.swing = self.swing_v = self.drag_vx = 0.0
                     self.set_state("held")
             if self.state == "held":
                 self.x = event.x_root
